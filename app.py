@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
@@ -40,26 +41,27 @@ def variacao_percentual_mom(atual: float, anterior: float) -> float:
 
 @st.cache_data
 def carregar_dados():
-    arquivo_caged = "relatorio_botucatu_q1_2026.csv"
-    arquivo_financas = "investimentos_botucatu_2026.csv"
-    pasta_dados = "data"
+    base_dir = Path(__file__).resolve().parent
+    pasta_dados = base_dir / "data"
 
-    caminho_caged_raiz = arquivo_caged
-    caminho_financas_raiz = arquivo_financas
-    caminho_caged_data = os.path.join(pasta_dados, arquivo_caged)
-    caminho_financas_data = os.path.join(pasta_dados, arquivo_financas)
+    candidatos_caged = [
+        base_dir / "relatorio_botucatu_q1_2026.csv",
+        base_dir / "caged_botucatu_q1_2026.csv",
+        pasta_dados / "relatorio_botucatu_q1_2026.csv",
+        pasta_dados / "caged_botucatu_q1_2026.csv",
+    ]
+    candidatos_financas = [
+        base_dir / "investimentos_botucatu_2026.csv",
+        base_dir / "financas_botucatu_2026.csv",
+        pasta_dados / "investimentos_botucatu_2026.csv",
+        pasta_dados / "financas_botucatu_2026.csv",
+    ]
 
-    caminho_caged = (
-        caminho_caged_raiz if os.path.exists(caminho_caged_raiz) else caminho_caged_data
-    )
-    caminho_financas = (
-        caminho_financas_raiz
-        if os.path.exists(caminho_financas_raiz)
-        else caminho_financas_data
-    )
+    caminho_caged = next((str(p) for p in candidatos_caged if p.exists()), None)
+    caminho_financas = next((str(p) for p in candidatos_financas if p.exists()), None)
 
-    caged_existe = os.path.exists(caminho_caged)
-    financas_existe = os.path.exists(caminho_financas)
+    caged_existe = caminho_caged is not None
+    financas_existe = caminho_financas is not None
 
     df_caged = (
         pd.read_csv(caminho_caged, sep=";", encoding="utf-8-sig")
