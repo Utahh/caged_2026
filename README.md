@@ -113,6 +113,9 @@ O projeto possui workflow em `.github/workflows/ci-cd.yml` com:
 - **CD (push na main)**:
   - Gera artefato empacotado (`observatorio-botucatu.tar.gz`);
   - Publica o artefato no GitHub Actions.
+- **Refresh automático de dados**:
+  - Executa `pipeline_botucatu.py` diariamente (schedule) e também sob demanda (`workflow_dispatch`);
+  - Se os CSVs mudarem, faz commit automático na `main`.
 
 Para deploy público do painel, o Streamlit Community Cloud faz atualização automática quando há push na branch conectada.
 
