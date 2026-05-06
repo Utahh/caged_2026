@@ -68,6 +68,11 @@ def first_present(col_map: Dict[str, str], candidates: List[str]) -> Optional[st
     return None
 
 
+def normalize_subclasse_code(value: object) -> str:
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    return digits.zfill(7) if digits else ""
+
+
 def download_file(url: str, output_path: Path) -> None:
     def _do_download():
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -215,15 +220,25 @@ def run_caged_etl() -> pd.DataFrame:
         .sum()
         .sort_values(["mes_referencia", "secao", "subclasse"])
     )
+    caged["subclasse"] = caged["subclasse"].map(normalize_subclasse_code)
+    caged["estoque_anual_2026"] = caged.groupby(["secao", "subclasse"])["saldomovimentacao"].transform("sum")
     return caged
 
 
 def fetch_siconfi_json() -> Dict:
+    raise NotImplementedError("Use fetch_siconfi_month_json for required parameterized calls.")
+
+
+def fetch_siconfi_month_json(month: int) -> Dict:
     base_url = "https://apidatalake.tesouro.gov.br/ords/siconfi/tt/msc_patrimonial"
     params = {
         "id_ente": BOTUCATU_ID_ENTE_SICONFI,
         "an_referencia": YEAR,
+        "me_referencia": month,
         "co_tipo_matriz": "MSCC",
+        "classe_conta": 1,
+        "id_tv": "ending_balance",
+        "limit": 5000,
     }
 
     session = requests.Session()
@@ -234,27 +249,74 @@ def fetch_siconfi_json() -> Dict:
         response.raise_for_status()
         return response.json()
 
-    return retry_exec(_do_request, attempts=3, sleep_seconds=5, context="requisição API Siconfi")
+    return retry_exec(
+        _do_request, attempts=3, sleep_seconds=5, context=f"requisição API Siconfi mês {month}"
+    )
+
+
+def fetch_cnae_subclasses_reference() -> pd.DataFrame:
+    url = "https://servicodados.ibge.gov.br/api/v2/cnae/subclasses"
+
+    def _do_request():
+        r = requests.get(url, timeout=60)
+        r.raise_for_status()
+        return r.json()
+
+    payload = retry_exec(_do_request, attempts=3, sleep_seconds=3, context="API IBGE CNAE")
+    if not isinstance(payload, list):
+        return pd.DataFrame()
+
+    rows = []
+    for item in payload:
+        classe = item.get("classe", {}) or {}
+        grupo = classe.get("grupo", {}) or {}
+        divisao = grupo.get("divisao", {}) or {}
+        secao = divisao.get("secao", {}) or {}
+        rows.append(
+            {
+                "subclasse": normalize_subclasse_code(item.get("id", "")),
+                "subclasse_descricao": str(item.get("descricao", "")).strip(),
+                "classe_cnae": str(classe.get("id", "")).strip(),
+                "classe_descricao": str(classe.get("descricao", "")).strip(),
+                "grupo_cnae": str(grupo.get("id", "")).strip(),
+                "grupo_descricao": str(grupo.get("descricao", "")).strip(),
+                "divisao_cnae": str(divisao.get("id", "")).strip(),
+                "divisao_descricao": str(divisao.get("descricao", "")).strip(),
+                "secao_cnae": str(secao.get("id", "")).strip(),
+                "secao_descricao": str(secao.get("descricao", "")).strip(),
+            }
+        )
+    ref = pd.DataFrame(rows).drop_duplicates(subset=["subclasse"])
+    return ref
+
+
+def enrich_caged_with_cnae_descriptions(caged: pd.DataFrame) -> pd.DataFrame:
+    if caged.empty:
+        return caged
+    try:
+        ref = fetch_cnae_subclasses_reference()
+        if ref.empty:
+            log("Referência IBGE CNAE vazia; seguindo sem descrições.")
+            return caged
+        out = caged.merge(ref, on="subclasse", how="left")
+        out["secao"] = out["secao"].astype(str).str.strip()
+        out["secao_descricao"] = out["secao_descricao"].fillna("")
+        # Usa seção do CAGED como fallback quando referência não casar
+        out["secao_cnae"] = out["secao_cnae"].fillna(out["secao"])
+        return out
+    except Exception as exc:
+        log(f"Falha ao enriquecer descrições CNAE: {exc}")
+        return caged
 
 
 def run_siconfi_etl() -> pd.DataFrame:
     log("ETL Siconfi iniciado.")
-    payload = fetch_siconfi_json()
-
-    # Estruturas comuns da API ORDS: {"items":[...]} ou lista direta
-    if isinstance(payload, dict):
-        if "items" in payload and isinstance(payload["items"], list):
-            items = payload["items"]
-        elif "result" in payload and isinstance(payload["result"], list):
-            items = payload["result"]
-        else:
-            # fallback: tenta usar todos os valores list
-            values_lists = [v for v in payload.values() if isinstance(v, list)]
-            items = values_lists[0] if values_lists else []
-    elif isinstance(payload, list):
-        items = payload
-    else:
-        items = []
+    items: List[Dict] = []
+    for month in [1, 2, 3]:
+        payload = fetch_siconfi_month_json(month)
+        month_items = payload.get("items", []) if isinstance(payload, dict) else []
+        log(f"Siconfi mês {month}: {len(month_items)} registros recebidos.")
+        items.extend(month_items)
 
     if not items:
         log("Siconfi retornou JSON vazio ou sem itens.")
@@ -265,14 +327,19 @@ def run_siconfi_etl() -> pd.DataFrame:
 
     col_conta = first_present(col_map, ["conta_contabil", "co_conta_contabil", "codigo_contabil"])
     col_mes = first_present(col_map, ["mes_referencia", "me_referencia", "mes", "no_mes"])
-    col_natureza = first_present(col_map, ["natureza", "no_natureza_conta", "ds_natureza_conta"])
+    col_natureza = first_present(
+        col_map, ["natureza", "natureza_conta", "no_natureza_conta", "ds_natureza_conta"]
+    )
     col_saldo = first_present(col_map, ["vl_saldo_final", "saldo", "saldo_em_reais", "valor"])
 
     if not all([col_conta, col_mes, col_natureza, col_saldo]):
         raise ValueError(f"Estrutura inesperada do Siconfi. Colunas recebidas: {list(df.columns)}")
 
     df[col_conta] = df[col_conta].astype(str).str.strip()
-    df = df[df[col_conta].str.startswith("1.1.1")].copy()
+    conta_norm = df[col_conta].str.replace(".", "", regex=False).str.replace("-", "", regex=False)
+    df = df[conta_norm.str.startswith("111")].copy()
+    if "tipo_valor" in df.columns:
+        df = df[df["tipo_valor"].astype(str).str.lower() == "ending_balance"]
 
     out = pd.DataFrame(
         {
@@ -298,6 +365,7 @@ def export_outputs(caged: pd.DataFrame, siconfi: pd.DataFrame) -> None:
     out_caged_app = BASE_DIR / "relatorio_botucatu_q1_2026.csv"
     out_fin_app = BASE_DIR / "investimentos_botucatu_2026.csv"
 
+    caged = enrich_caged_with_cnae_descriptions(caged)
     caged.to_csv(out_caged, sep=";", encoding="utf-8-sig", index=False)
     siconfi.to_csv(out_fin, sep=";", encoding="utf-8-sig", index=False, decimal=",")
 

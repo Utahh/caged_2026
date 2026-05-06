@@ -136,12 +136,21 @@ if caged_existe and not df_caged.empty:
             adm_mar = df_mar["admissao"].sum()
             des_mar = df_mar["demissao"].sum()
             saldo_mar = df_mar["saldomovimentacao"].sum()
+            if "estoque_anual_2026" in df_caged.columns:
+                estoque_anual = (
+                    df_caged[["secao", "subclasse", "estoque_anual_2026"]]
+                    .drop_duplicates()
+                    ["estoque_anual_2026"]
+                    .sum()
+                )
+            else:
+                estoque_anual = df_caged[df_caged["mes_referencia"].isin([1, 2, 3])]["saldomovimentacao"].sum()
 
             adm_fev = df_fev["admissao"].sum()
             des_fev = df_fev["demissao"].sum()
             saldo_fev = df_fev["saldomovimentacao"].sum()
 
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4 = st.columns(4)
             c1.metric(
                 "Total de Admissões (Março)",
                 formatar_inteiro_br(adm_mar),
@@ -158,12 +167,21 @@ if caged_existe and not df_caged.empty:
                 formatar_inteiro_br(saldo_mar),
                 f"{variacao_percentual_mom(saldo_mar, saldo_fev):+.1f}% vs Fev",
             )
+            c4.metric("Estoque Anual 2026 (Jan-Mar)", formatar_inteiro_br(estoque_anual))
 
             st.write("---")
 
             st.subheader("Top 5 Seções com maior ganho e maior perda de saldo")
+            if "secao_descricao" in df_mar.columns:
+                df_mar["secao_label"] = (
+                    df_mar["secao"].astype(str).str.strip()
+                    + " - "
+                    + df_mar["secao_descricao"].fillna("").astype(str).str.strip()
+                ).str.strip(" -")
+            else:
+                df_mar["secao_label"] = df_mar["secao"].astype(str).str.strip()
             saldo_secao = (
-                df_mar.groupby("secao", as_index=False)["saldomovimentacao"]
+                df_mar.groupby("secao_label", as_index=False)["saldomovimentacao"]
                 .sum()
                 .sort_values("saldomovimentacao", ascending=False)
             )
@@ -176,11 +194,11 @@ if caged_existe and not df_caged.empty:
             fig_secao = px.bar(
                 top_secao,
                 x="saldomovimentacao",
-                y="secao",
+                y="secao_label",
                 orientation="h",
                 color="grupo",
                 facet_col="grupo",
-                labels={"saldomovimentacao": "Saldo", "secao": "Seção"},
+                labels={"saldomovimentacao": "Saldo", "secao_label": "Seção"},
                 title="Saldo por Atividade Econômica (Seção) - Março/2026",
             )
             fig_secao.update_layout(showlegend=False, margin=dict(l=10, r=10, t=60, b=10))
@@ -190,13 +208,19 @@ if caged_existe and not df_caged.empty:
             col_a, col_b = st.columns(2)
 
             cnae_adm = (
-                df_mar.groupby("subclasse", as_index=False)["admissao"]
+                df_mar.groupby(
+                    [c for c in ["subclasse", "subclasse_descricao"] if c in df_mar.columns],
+                    as_index=False,
+                )["admissao"]
                 .sum()
                 .sort_values("admissao", ascending=False)
                 .head(3)
             )
             cnae_dem = (
-                df_mar.groupby("subclasse", as_index=False)["demissao"]
+                df_mar.groupby(
+                    [c for c in ["subclasse", "subclasse_descricao"] if c in df_mar.columns],
+                    as_index=False,
+                )["demissao"]
                 .sum()
                 .sort_values("demissao", ascending=False)
                 .head(3)
