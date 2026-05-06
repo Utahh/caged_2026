@@ -15,10 +15,23 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-        .block-container {padding-top: 1rem; padding-bottom: 1rem;}
+        .block-container {padding-top: 0.75rem; padding-bottom: 1rem; max-width: 1400px;}
         .kpi-label {color: #6b7280; font-size: 0.95rem;}
         .kpi-value {color: #1a237e; font-size: 2.4rem; font-weight: 700; line-height: 1;}
         .stDataFrame thead tr th {font-size: 0.75rem !important; color: #6b7280 !important;}
+        [data-testid="stMetricValue"] {font-size: 2rem;}
+        [data-testid="stMetricLabel"] {font-size: 0.9rem;}
+        @media (max-width: 1024px) {
+            .block-container {padding-left: 0.8rem; padding-right: 0.8rem;}
+        }
+        @media (max-width: 768px) {
+            .block-container {padding-top: 0.35rem; padding-left: 0.6rem; padding-right: 0.6rem;}
+            h1 {font-size: 1.35rem !important; line-height: 1.25 !important;}
+            h2, h3 {font-size: 1.05rem !important; line-height: 1.25 !important;}
+            [data-testid="stMetricValue"] {font-size: 1.35rem !important;}
+            [data-testid="stMetricLabel"] {font-size: 0.8rem !important;}
+            .stDataFrame thead tr th {font-size: 0.68rem !important;}
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -249,7 +262,9 @@ if not df_caged.empty:
     saldo_ant = df_mes_ant["saldomovimentacao"].sum()
 
     st.markdown("## Indicadores-chave")
-    k1, k2, k3, k4 = st.columns(4)
+    is_mobile = st.checkbox("Modo celular (layout compacto)", value=False)
+    k1, k2 = st.columns(2)
+    k3, k4 = st.columns(2)
     k1.metric("Admissões", formatar_inteiro_br(adm), f"{variacao_percentual_mom(adm, adm_ant):+.1f}%")
     k2.metric("Desligamentos", formatar_inteiro_br(des), f"{variacao_percentual_mom(des, des_ant):+.1f}%", delta_color="inverse")
     k3.metric("Saldo", formatar_inteiro_br(saldo), f"{variacao_percentual_mom(saldo, saldo_ant):+.1f}%")
@@ -259,43 +274,51 @@ if not df_caged.empty:
     evol = dff.groupby("mes_referencia", as_index=False)[["admissao", "demissao", "saldomovimentacao"]].sum()
     evol["mes_label"] = evol["mes_referencia"].map(MESES_LABEL)
 
-    c1, c2 = st.columns(2)
-    with c1:
-        fig_linhas = go.Figure()
-        fig_linhas.add_trace(go.Scatter(x=evol["mes_label"], y=evol["admissao"], mode="lines+markers", name="Admissões", line=dict(color="#1a237e", width=3)))
-        fig_linhas.add_trace(go.Scatter(x=evol["mes_label"], y=evol["demissao"], mode="lines+markers", name="Desligamentos", line=dict(color="#ef4444", width=3)))
-        fig_linhas.update_layout(
-            title="Evolução das Admissões e Desligamentos",
-            plot_bgcolor="white",
-            yaxis=dict(showgrid=True, gridcolor="rgba(107,114,128,0.2)", griddash="dot"),
-            xaxis=dict(showgrid=False),
-        )
-        st.plotly_chart(fig_linhas, use_container_width=True)
+    fig_linhas = go.Figure()
+    fig_linhas.add_trace(go.Scatter(x=evol["mes_label"], y=evol["admissao"], mode="lines+markers", name="Admissões", line=dict(color="#1a237e", width=3)))
+    fig_linhas.add_trace(go.Scatter(x=evol["mes_label"], y=evol["demissao"], mode="lines+markers", name="Desligamentos", line=dict(color="#ef4444", width=3)))
+    fig_linhas.update_layout(
+        title="Evolução das Admissões e Desligamentos",
+        plot_bgcolor="white",
+        yaxis=dict(showgrid=True, gridcolor="rgba(107,114,128,0.2)", griddash="dot"),
+        xaxis=dict(showgrid=False),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        margin=dict(l=10, r=10, t=60, b=20),
+    )
 
-    with c2:
-        cores = ["#1a237e" if v >= 0 else "#ef4444" for v in evol["saldomovimentacao"]]
-        fig_saldo = go.Figure(
-            data=[
-                go.Bar(
-                    x=evol["mes_label"],
-                    y=evol["saldomovimentacao"],
-                    marker_color=cores,
-                    text=[formatar_inteiro_br(v) for v in evol["saldomovimentacao"]],
-                    textposition="outside",
-                    name="Saldo",
-                )
-            ]
-        )
-        fig_saldo.update_layout(
-            title="Evolução do Saldo por Competência",
-            plot_bgcolor="white",
-            yaxis=dict(zeroline=True, zerolinewidth=2, zerolinecolor="#6b7280"),
-            xaxis=dict(showgrid=False),
-        )
+    cores = ["#1a237e" if v >= 0 else "#ef4444" for v in evol["saldomovimentacao"]]
+    fig_saldo = go.Figure(
+        data=[
+            go.Bar(
+                x=evol["mes_label"],
+                y=evol["saldomovimentacao"],
+                marker_color=cores,
+                text=[formatar_inteiro_br(v) for v in evol["saldomovimentacao"]],
+                textposition="outside",
+                name="Saldo",
+            )
+        ]
+    )
+    fig_saldo.update_layout(
+        title="Evolução do Saldo por Competência",
+        plot_bgcolor="white",
+        yaxis=dict(zeroline=True, zerolinewidth=2, zerolinecolor="#6b7280"),
+        xaxis=dict(showgrid=False),
+        margin=dict(l=10, r=10, t=60, b=20),
+    )
+
+    if is_mobile:
+        st.plotly_chart(fig_linhas, use_container_width=True)
         st.plotly_chart(fig_saldo, use_container_width=True)
+    else:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(fig_linhas, use_container_width=True)
+        with c2:
+            st.plotly_chart(fig_saldo, use_container_width=True)
 
     st.markdown("## Atividade Econômica")
-    eco1, eco2 = st.columns([1.2, 1])
+    eco1, eco2 = st.columns([1.2, 1]) if not is_mobile else (st.container(), st.container())
     with eco1:
         saldo_grande = (
             df_mes.groupby("grande_grupamento", as_index=False)[["admissao", "demissao", "saldomovimentacao"]]
