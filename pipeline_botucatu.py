@@ -3,6 +3,7 @@ import os
 import shutil
 import time
 import urllib.request
+import unicodedata
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -46,7 +47,18 @@ def detect_delimiter(file_path: Path) -> str:
 
 
 def normalize_col_map(columns: Iterable[str]) -> Dict[str, str]:
-    return {str(c).strip().lower(): c for c in columns}
+    mapped = {}
+    for c in columns:
+        raw = str(c).strip().lower()
+        ascii_key = (
+            unicodedata.normalize("NFKD", raw)
+            .encode("ascii", "ignore")
+            .decode("ascii")
+            .strip()
+            .lower()
+        )
+        mapped[ascii_key] = c
+    return mapped
 
 
 def first_present(col_map: Dict[str, str], candidates: List[str]) -> Optional[str]:
@@ -77,8 +89,8 @@ def resolve_caged_columns(raw_file: Path, delimiter: str) -> Tuple[Dict[str, str
     header_df = pd.read_csv(raw_file, sep=delimiter, nrows=0, encoding="utf-8", low_memory=False)
     col_map = normalize_col_map(header_df.columns)
 
-    col_municipio = first_present(col_map, ["municipio", "município", "id_municipio", "codmunicipio"])
-    col_secao = first_present(col_map, ["secao", "seção"])
+    col_municipio = first_present(col_map, ["municipio", "id_municipio", "codmunicipio"])
+    col_secao = first_present(col_map, ["secao"])
     col_subclasse = first_present(col_map, ["subclasse", "subclassecnae20", "subclasse_cnae"])
     col_saldo = first_present(col_map, ["saldomovimentacao", "saldo_movimentacao", "saldo"])
 
