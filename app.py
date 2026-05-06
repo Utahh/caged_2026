@@ -55,6 +55,36 @@ def variacao_percentual_mom(atual: float, anterior: float) -> float:
     return ((atual - anterior) / abs(anterior)) * 100
 
 
+def estilizar_figura(fig):
+    fig.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        hoverlabel=dict(bgcolor="#111827", font=dict(color="white", size=13)),
+        margin=dict(l=10, r=10, t=60, b=20),
+    )
+    fig.update_xaxes(showgrid=False, zeroline=False, fixedrange=True)
+    fig.update_yaxes(showgrid=False, zeroline=False, fixedrange=True)
+    return fig
+
+
+PLOTLY_CONFIG = {
+    "responsive": True,
+    "scrollZoom": False,
+    "doubleClick": False,
+    "displaylogo": False,
+    "modeBarButtonsToRemove": [
+        "zoom2d",
+        "pan2d",
+        "select2d",
+        "lasso2d",
+        "zoomIn2d",
+        "zoomOut2d",
+        "autoScale2d",
+        "resetScale2d",
+    ],
+}
+
+
 def normalizar_ibge_str(valor: object) -> str:
     texto = "".join(ch for ch in str(valor) if ch.isdigit())
     if len(texto) == 6:
@@ -276,14 +306,12 @@ if not df_caged.empty:
     fig_linhas = go.Figure()
     fig_linhas.add_trace(go.Scatter(x=evol["mes_label"], y=evol["admissao"], mode="lines+markers", name="Admissões", line=dict(color="#1a237e", width=3)))
     fig_linhas.add_trace(go.Scatter(x=evol["mes_label"], y=evol["demissao"], mode="lines+markers", name="Desligamentos", line=dict(color="#ef4444", width=3)))
+    fig_linhas.update_traces(hovertemplate="<b>%{x}</b><br>%{fullData.name}: %{y:,.0f}<extra></extra>")
     fig_linhas.update_layout(
         title="Evolução das Admissões e Desligamentos",
-        plot_bgcolor="white",
-        yaxis=dict(showgrid=True, gridcolor="rgba(107,114,128,0.2)", griddash="dot"),
-        xaxis=dict(showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-        margin=dict(l=10, r=10, t=60, b=20),
     )
+    estilizar_figura(fig_linhas)
 
     cores = ["#1a237e" if v >= 0 else "#ef4444" for v in evol["saldomovimentacao"]]
     fig_saldo = go.Figure(
@@ -295,22 +323,20 @@ if not df_caged.empty:
                 text=[formatar_inteiro_br(v) for v in evol["saldomovimentacao"]],
                 textposition="outside",
                 name="Saldo",
+                hovertemplate="<b>%{x}</b><br>Saldo: %{y:,.0f}<extra></extra>",
             )
         ]
     )
     fig_saldo.update_layout(
         title="Evolução do Saldo por Competência",
-        plot_bgcolor="white",
-        yaxis=dict(zeroline=True, zerolinewidth=2, zerolinecolor="#6b7280"),
-        xaxis=dict(showgrid=False),
-        margin=dict(l=10, r=10, t=60, b=20),
     )
+    estilizar_figura(fig_saldo)
 
     c1, c2 = st.columns(2)
     with c1:
-        st.plotly_chart(fig_linhas, use_container_width=True)
+        st.plotly_chart(fig_linhas, use_container_width=True, config=PLOTLY_CONFIG)
     with c2:
-        st.plotly_chart(fig_saldo, use_container_width=True)
+        st.plotly_chart(fig_saldo, use_container_width=True, config=PLOTLY_CONFIG)
 
     st.markdown("## Atividade Econômica")
     eco1, eco2 = st.columns([1.2, 1])
@@ -330,7 +356,9 @@ if not df_caged.empty:
             labels={"saldomovimentacao": "Saldo", "grande_grupamento": "Grande Grupamento"},
             title="Saldo por Grande Grupamento de Atividade Econômica",
         )
-        st.plotly_chart(fig_gg, use_container_width=True)
+        fig_gg.update_traces(hovertemplate="<b>%{y}</b><br>Saldo: %{x:,.0f}<extra></extra>")
+        estilizar_figura(fig_gg)
+        st.plotly_chart(fig_gg, use_container_width=True, config=PLOTLY_CONFIG)
 
     with eco2:
         det = saldo_grande.copy()
@@ -402,7 +430,11 @@ if not df_financas.empty:
             labels={"mes_label": "Mês", "Saldo_em_Reais": "Valor (R$)", "instituicao_financeira": "Instituição Financeira"},
             title="Volume de investimentos por instituição financeira e por mês",
         )
-        st.plotly_chart(fig_fin, use_container_width=True)
+        fig_fin.update_traces(
+            hovertemplate="<b>%{x}</b><br>Instituição: %{fullData.name}<br>Valor: R$ %{y:,.2f}<extra></extra>"
+        )
+        estilizar_figura(fig_fin)
+        st.plotly_chart(fig_fin, use_container_width=True, config=PLOTLY_CONFIG)
     else:
         st.warning("⚠️ Base financeira carregada, mas sem registros para 2026.")
 else:
