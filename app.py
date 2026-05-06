@@ -262,7 +262,6 @@ if not df_caged.empty:
     saldo_ant = df_mes_ant["saldomovimentacao"].sum()
 
     st.markdown("## Indicadores-chave")
-    is_mobile = st.checkbox("Modo celular (layout compacto)", value=False)
     k1, k2 = st.columns(2)
     k3, k4 = st.columns(2)
     k1.metric("Admissões", formatar_inteiro_br(adm), f"{variacao_percentual_mom(adm, adm_ant):+.1f}%")
@@ -307,18 +306,14 @@ if not df_caged.empty:
         margin=dict(l=10, r=10, t=60, b=20),
     )
 
-    if is_mobile:
+    c1, c2 = st.columns(2)
+    with c1:
         st.plotly_chart(fig_linhas, use_container_width=True)
+    with c2:
         st.plotly_chart(fig_saldo, use_container_width=True)
-    else:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.plotly_chart(fig_linhas, use_container_width=True)
-        with c2:
-            st.plotly_chart(fig_saldo, use_container_width=True)
 
     st.markdown("## Atividade Econômica")
-    eco1, eco2 = st.columns([1.2, 1]) if not is_mobile else (st.container(), st.container())
+    eco1, eco2 = st.columns([1.2, 1])
     with eco1:
         saldo_grande = (
             df_mes.groupby("grande_grupamento", as_index=False)[["admissao", "demissao", "saldomovimentacao"]]
