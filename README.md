@@ -34,6 +34,38 @@ streamlit run app.py
 
 5. Abra o endereço exibido no terminal (normalmente `http://localhost:8501`).
 
+## Pipeline Mestre (extração automática)
+
+Arquivo: `pipeline_botucatu.py`
+
+Esse pipeline único executa em sequência:
+
+1. **CAGED (FTP)**:
+   - baixa meses `01`, `02`, `03` de 2026;
+   - descompacta `.7z` com `py7zr`;
+   - lê em chunks de `100000` linhas;
+   - filtra apenas município `350750` (Botucatu);
+   - cria `mes_referencia`, `admissao` e `demissao`;
+   - remove `.7z` e `.txt` após cada mês.
+
+2. **Siconfi (API)**:
+   - consulta endpoint `msc_patrimonial`;
+   - filtra contas iniciadas por `1.1.1`;
+   - gera tabela de finanças consolidada.
+
+3. **Exporta**:
+   - `caged_botucatu_q1_2026.csv`
+   - `financas_botucatu_2026.csv`
+   - e também os arquivos compatíveis com o app:
+     - `relatorio_botucatu_q1_2026.csv`
+     - `investimentos_botucatu_2026.csv`
+
+### Rodar pipeline mestre
+
+```bash
+python pipeline_botucatu.py
+```
+
 ## Funcionalidades do MVP
 
 - **CAGED (Março/2026 vs Fevereiro/2026)**

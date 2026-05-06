@@ -42,18 +42,33 @@ def variacao_percentual_mom(atual: float, anterior: float) -> float:
 def carregar_dados():
     arquivo_caged = "relatorio_botucatu_q1_2026.csv"
     arquivo_financas = "investimentos_botucatu_2026.csv"
+    pasta_dados = "data"
 
-    caged_existe = os.path.exists(arquivo_caged)
-    financas_existe = os.path.exists(arquivo_financas)
+    caminho_caged_raiz = arquivo_caged
+    caminho_financas_raiz = arquivo_financas
+    caminho_caged_data = os.path.join(pasta_dados, arquivo_caged)
+    caminho_financas_data = os.path.join(pasta_dados, arquivo_financas)
+
+    caminho_caged = (
+        caminho_caged_raiz if os.path.exists(caminho_caged_raiz) else caminho_caged_data
+    )
+    caminho_financas = (
+        caminho_financas_raiz
+        if os.path.exists(caminho_financas_raiz)
+        else caminho_financas_data
+    )
+
+    caged_existe = os.path.exists(caminho_caged)
+    financas_existe = os.path.exists(caminho_financas)
 
     df_caged = (
-        pd.read_csv(arquivo_caged, sep=";", encoding="utf-8-sig")
+        pd.read_csv(caminho_caged, sep=";", encoding="utf-8-sig")
         if caged_existe
         else pd.DataFrame()
     )
     df_financas = (
         pd.read_csv(
-            arquivo_financas,
+            caminho_financas,
             sep=";",
             encoding="utf-8-sig",
             decimal=",",
