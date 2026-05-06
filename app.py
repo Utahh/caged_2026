@@ -84,7 +84,7 @@ def carregar_dados():
 
 df_caged, df_financas, caged_existe, financas_existe = carregar_dados()
 
-st.title("📊 Observatório Botucatu - Março 2026")
+st.title("📊 Dados gerais de março de 2026")
 st.markdown("Relatório consolidado de emprego (CAGED) e finanças públicas (Siconfi).")
 st.divider()
 
@@ -108,7 +108,7 @@ if not financas_existe:
     )
 
 
-st.header("🏢 Relatório do CAGED (Março/2026 vs Fevereiro/2026)")
+st.header("🏢 Relatório do CAGED")
 
 if caged_existe and not df_caged.empty:
     colunas_caged = {
@@ -127,8 +127,9 @@ if caged_existe and not df_caged.empty:
         for coluna in ["mes_referencia", "saldomovimentacao", "admissao", "demissao"]:
             df_caged[coluna] = pd.to_numeric(df_caged[coluna], errors="coerce").fillna(0)
 
-        df_mar = df_caged[df_caged["mes_referencia"] == 3].copy()
-        df_fev = df_caged[df_caged["mes_referencia"] == 2].copy()
+        df_q1 = df_caged[df_caged["mes_referencia"].isin([1, 2, 3])].copy()
+        df_mar = df_q1[df_q1["mes_referencia"] == 3].copy()
+        df_fev = df_q1[df_q1["mes_referencia"] == 2].copy()
 
         if df_mar.empty or df_fev.empty:
             st.warning("⚠️ Não há dados suficientes para comparar Março e Fevereiro.")
@@ -170,39 +171,93 @@ if caged_existe and not df_caged.empty:
             c4.metric("Estoque Anual 2026 (Jan-Mar)", formatar_inteiro_br(estoque_anual))
 
             st.write("---")
+            st.subheader("Comparativo dos indicadores nos 3 meses (Jan-Mar)")
+            comparativo = (
+                df_q1.groupby("mes_referencia", as_index=False)[
+                    ["admissao", "demissao", "saldomovimentacao"]
+                ]
+                .sum()
+                .sort_values("mes_referencia")
+            )
+            comparativo_long = comparativo.melt(
+                id_vars="mes_referencia",
+                value_vars=["admissao", "demissao", "saldomovimentacao"],
+                var_name="indicador",
+                value_name="quantidade",
+            )
+            nomes_indicador = {
+                "admissao": "Admissões",
+                "demissao": "Desligamentos",
+                "saldomovimentacao": "Saldo",
+            }
+            comparativo_long["indicador"] = comparativo_long["indicador"].map(nomes_indicador)
+            comparativo_long["mes_label"] = comparativo_long["mes_referencia"].map({1: "Jan", 2: "Fev", 3: "Mar"})
+            fig_comp = px.bar(
+                comparativo_long,
+                x="mes_label",
+                y="quantidade",
+                color="indicador",
+                barmode="group",
+                labels={"mes_label": "Mês", "quantidade": "Quantidade", "indicador": ""},
+                title="Comparativo mensal de admissões, desligamentos e saldo",
+            )
+            st.plotly_chart(fig_comp, use_container_width=True)
 
-            st.subheader("Top 5 Seções com maior ganho e maior perda de saldo")
+            st.subheader("Atividades econômicas em cluster (Março)")
             if "secao_descricao" in df_mar.columns:
-                df_mar["secao_label"] = (
-                    df_mar["secao"].astype(str).str.strip()
-                    + " - "
-                    + df_mar["secao_descricao"].fillna("").astype(str).str.strip()
-                ).str.strip(" -")
+                df_mar["secao_label"] = df_mar["secao_descricao"].fillna(df_mar["secao"]).astype(str).str.strip()
             else:
                 df_mar["secao_label"] = df_mar["secao"].astype(str).str.strip()
+
+            cluster_secao = (
+                df_mar.groupby("secao_label", as_index=False)[["admissao", "demissao", "saldomovimentacao"]]
+                .sum()
+                .sort_values("saldomovimentacao", ascending=False)
+            )
+            cluster_long = cluster_secao.melt(
+                id_vars="secao_label",
+                value_vars=["admissao", "demissao", "saldomovimentacao"],
+                var_name="indicador",
+                value_name="quantidade",
+            )
+            cluster_long["indicador"] = cluster_long["indicador"].map(nomes_indicador)
+            fig_cluster = px.bar(
+                cluster_long,
+                x="secao_label",
+                y="quantidade",
+                color="indicador",
+                barmode="group",
+                labels={"secao_label": "Atividade Econômica", "quantidade": "Quantidade", "indicador": ""},
+                title="Cluster por atividade econômica",
+            )
+            fig_cluster.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig_cluster, use_container_width=True)
+
+            st.subheader("Top 5 atividades com maior e menor saldo (Março)")
             saldo_secao = (
                 df_mar.groupby("secao_label", as_index=False)["saldomovimentacao"]
                 .sum()
                 .sort_values("saldomovimentacao", ascending=False)
             )
-            top_positivos = saldo_secao.head(5).copy()
-            top_negativos = saldo_secao.sort_values("saldomovimentacao", ascending=True).head(5).copy()
-            top_positivos["grupo"] = "Maiores ganhos"
-            top_negativos["grupo"] = "Maiores perdas"
-            top_secao = pd.concat([top_positivos, top_negativos], ignore_index=True)
-
-            fig_secao = px.bar(
-                top_secao,
-                x="saldomovimentacao",
-                y="secao_label",
-                orientation="h",
-                color="grupo",
-                facet_col="grupo",
-                labels={"saldomovimentacao": "Saldo", "secao_label": "Seção"},
-                title="Saldo por Atividade Econômica (Seção) - Março/2026",
-            )
-            fig_secao.update_layout(showlegend=False, margin=dict(l=10, r=10, t=60, b=10))
-            st.plotly_chart(fig_secao, use_container_width=True)
+            col_pos, col_neg = st.columns(2)
+            with col_pos:
+                st.markdown("**Top 5 maiores saldos**")
+                st.dataframe(
+                    saldo_secao.head(5).rename(
+                        columns={"secao_label": "Atividade Econômica", "saldomovimentacao": "Saldo"}
+                    ),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+            with col_neg:
+                st.markdown("**Top 5 menores saldos**")
+                st.dataframe(
+                    saldo_secao.sort_values("saldomovimentacao", ascending=True)
+                    .head(5)
+                    .rename(columns={"secao_label": "Atividade Econômica", "saldomovimentacao": "Saldo"}),
+                    hide_index=True,
+                    use_container_width=True,
+                )
 
             st.subheader("Top 3 CNAEs (Subclasse)")
             col_a, col_b = st.columns(2)
@@ -259,3 +314,43 @@ if financas_existe and not df_financas.empty:
                 label=f"Valor financeiro total mais recente (Mês {mes_recente}/2026)",
                 value=formatar_moeda_br(saldo_total),
             )
+            df_valid["instituicao_financeira"] = (
+                "Conta "
+                + df_valid["Codigo_Contabil"].astype(str).str.strip()
+                + " ("
+                + df_valid["Natureza"].astype(str).str.strip()
+                + ")"
+            )
+
+            st.subheader("Evolução mensal do total financeiro")
+            mensal = (
+                df_valid.groupby("Mes", as_index=False)["Saldo_em_Reais"]
+                .sum()
+                .sort_values("Mes")
+            )
+            mensal["Mes_label"] = mensal["Mes"].map({1: "Jan", 2: "Fev", 3: "Mar"})
+            fig_mensal = px.bar(
+                mensal,
+                x="Mes_label",
+                y="Saldo_em_Reais",
+                labels={"Mes_label": "Mês", "Saldo_em_Reais": "Valor (R$)"},
+                title="Total mensal de investimentos em banco",
+            )
+            st.plotly_chart(fig_mensal, use_container_width=True)
+
+            st.subheader(f"Distribuição por instituições financeiras/contas (Mês {mes_recente})")
+            por_instituicao = (
+                df_valid[df_valid["Mes"] == mes_recente]
+                .groupby("instituicao_financeira", as_index=False)["Saldo_em_Reais"]
+                .sum()
+                .sort_values("Saldo_em_Reais", ascending=False)
+            )
+            fig_inst = px.bar(
+                por_instituicao,
+                x="Saldo_em_Reais",
+                y="instituicao_financeira",
+                orientation="h",
+                labels={"Saldo_em_Reais": "Valor (R$)", "instituicao_financeira": "Instituição/Conta"},
+                title="Distribuição por instituição financeira/conta",
+            )
+            st.plotly_chart(fig_inst, use_container_width=True)
