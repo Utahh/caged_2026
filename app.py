@@ -6,6 +6,7 @@ import fitz
 import plotly.express as px
 import plotly.graph_objects as go
 import polars as pl
+import requests
 import streamlit as st
 
 st.set_page_config(layout="wide", initial_sidebar_state="collapsed")
@@ -195,6 +196,39 @@ def gerar_pdf_caged(df_caged_completo: pl.DataFrame, mes_selecionado: int, ano: 
         return buffer
     finally:
         doc.close()
+
+
+def montar_contexto_ia_caged(df_caged_completo: pl.DataFrame) -> list[dict]:
+    """Consolida histórico CAGED para contexto de IA sem payload gigante."""
+    if df_caged_completo.is_empty():
+        return []
+
+    if "ano_referencia" in df_caged_completo.columns:
+        ano_expr = pl.col("ano_referencia").cast(pl.Int64).alias("ano")
+    else:
+        ano_expr = pl.lit(2026).cast(pl.Int64).alias("ano")
+
+    df_ia_contexto = (
+        df_caged_completo.with_columns(
+            [
+                ano_expr,
+                pl.col("mes_referencia").cast(pl.Int64).alias("mes"),
+                pl.col("Atividade Econômica").cast(pl.String).alias("atividade_economica"),
+                pl.col("admissao").cast(pl.Float64).fill_null(0.0).alias("admissoes"),
+                pl.col("demissao").cast(pl.Float64).fill_null(0.0).alias("desligamentos"),
+            ]
+        )
+        .group_by(["ano", "mes", "atividade_economica"])
+        .agg(
+            [
+                pl.col("admissoes").sum().alias("total_admissoes"),
+                pl.col("desligamentos").sum().alias("total_desligamentos"),
+                (pl.col("admissoes").sum() - pl.col("desligamentos").sum()).alias("saldo_liquido"),
+            ]
+        )
+        .sort(["ano", "mes", "atividade_economica"])
+    )
+    return df_ia_contexto.to_dicts()
 
 
 @st.cache_data
@@ -470,3 +504,33 @@ if not caged.is_empty():
             hide_index=True,
             height=220,
         )
+
+st.markdown("## Assistente IA (n8n)")
+pergunta_ia = st.text_input("Pergunta para a IA", placeholder="Ex.: Compare a evolução de Serviços ao longo de 2026")
+if st.button("Enviar para IA", use_container_width=False):
+    webhook_url = st.secrets.get("N8N_WEBHOOK_URL", "")
+    if not webhook_url:
+        st.error("Defina N8N_WEBHOOK_URL em secrets para habilitar a integração.")
+    elif not pergunta_ia.strip():
+        st.warning("Digite uma pergunta antes de enviar.")
+    else:
+        dados_historicos_json = montar_contexto_ia_caged(caged)
+        payload = {
+            "pergunta": pergunta_ia.strip(),
+            "dados_contexto": dados_historicos_json,
+        }
+        try:
+            with st.spinner("Consultando assistente IA..."):
+                resp = requests.post(webhook_url, json=payload, timeout=30)
+                resp.raise_for_status()
+            try:
+                resposta = resp.json()
+                st.success("Resposta recebida do n8n.")
+                st.write(resposta)
+            except ValueError:
+                st.success("Resposta recebida do n8n.")
+                st.write(resp.text)
+        except requests.Timeout:
+            st.error("Tempo limite excedido ao consultar o webhook n8n.")
+        except requests.RequestException as exc:
+            st.error(f"Falha na integração com n8n: {exc}")
