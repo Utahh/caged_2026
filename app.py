@@ -327,42 +327,7 @@ with menu_l:
         )
         grupo = st.selectbox("Atividade Econômica", grupos, index=0)
 with menu_r:
-    if caged.is_empty():
-        st.button("📤", help="Sem base CAGED para exportação", use_container_width=True, disabled=True)
-    else:
-        try:
-            pdf_buffer_top = gerar_pdf_caged(caged, month, ano="2026")
-            st.download_button(
-                "📤",
-                data=pdf_buffer_top.getvalue(),
-                file_name=f"Relatorio_CAGED_{month}_2026.pdf",
-                mime="application/pdf",
-                help="Exportar relatório PDF",
-                use_container_width=True,
-            )
-        except FileNotFoundError:
-            st.button("📤", help="Template template_caged.pdf não encontrado", use_container_width=True, disabled=True)
-        except Exception:
-            st.button("📤", help="Erro ao gerar PDF", use_container_width=True, disabled=True)
-
-with st.sidebar:
-    st.markdown("### Exportar Relatório")
-    if caged.is_empty():
-        st.caption("Sem base CAGED para gerar PDF.")
-    else:
-        try:
-            pdf_buffer = gerar_pdf_caged(caged, month, ano="2026")
-            st.download_button(
-                "Baixar PDF CAGED",
-                data=pdf_buffer.getvalue(),
-                file_name=f"Relatorio_CAGED_{month}_2026.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
-        except FileNotFoundError:
-            st.error("Template template_caged.pdf não encontrado na raiz do projeto.")
-        except Exception as exc:
-            st.error(f"Erro ao gerar PDF: {exc}")
+    st.empty()
 
 if not caged.is_empty():
     c = caged.filter(pl.col("mes_referencia").is_in([1, 2, 3]))
