@@ -201,6 +201,40 @@ def format_mi(v: float) -> str:
     return f"R$ {v / 1_000_000:.1f} M".replace(".", ",")
 
 
+def format_compact_brl(v: float) -> str:
+    abs_v = abs(v)
+    if abs_v >= 1_000_000_000:
+        return f"R$ {v / 1_000_000_000:.1f} bi".replace(".", ",")
+    if abs_v >= 1_000_000:
+        return f"R$ {v / 1_000_000:.1f} M".replace(".", ",")
+    if abs_v >= 1_000:
+        return f"R$ {v / 1_000:.1f} mil".replace(".", ",")
+    return f"R$ {v:,.0f}".replace(",", ".")
+
+
+def format_data_ref_extenso(data_ref: str) -> str:
+    try:
+        ano_txt, mes_txt = data_ref.split("-")
+        mes_num = int(mes_txt)
+        mes_nome = {
+            1: "Janeiro",
+            2: "Fevereiro",
+            3: "Março",
+            4: "Abril",
+            5: "Maio",
+            6: "Junho",
+            7: "Julho",
+            8: "Agosto",
+            9: "Setembro",
+            10: "Outubro",
+            11: "Novembro",
+            12: "Dezembro",
+        }.get(mes_num, mes_txt)
+        return f"{mes_nome} de {ano_txt}"
+    except Exception:
+        return data_ref
+
+
 def processar_dados_estban(df_estban: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     if df_estban.is_empty():
         vazio_kpi = pl.DataFrame({"valor_atual": [0.0], "delta_perc": [0.0], "data_ref": ["Sem dados"]})
@@ -250,6 +284,7 @@ def processar_dados_estban(df_estban: pl.DataFrame) -> tuple[pl.DataFrame, pl.Da
         base.filter(pl.col("data_ref") == ref_atual)
         .group_by("instituicao")
         .agg(pl.col("valor_poupanca").sum().alias("valor_total"))
+        .filter(pl.col("valor_total") > 0)
         .sort("valor_total", descending=True)
     )
 
@@ -563,10 +598,10 @@ else:
 
     st.metric(
         "Volume Total de Poupança",
-        format_mi(valor_atual),
+        format_compact_brl(valor_atual),
         format_pct(delta_perc),
     )
-    st.caption(f"Dados de referência: {data_ref}")
+    st.caption(f"Dados de referência: {format_data_ref_extenso(data_ref)}")
 
     col_rank, col_trend = st.columns(2)
 
@@ -575,16 +610,17 @@ else:
             st.info("Sem dados de ranking de instituições.")
         else:
             rank_pd = df_bancos_ranking.head(5).to_pandas()
+            rank_pd["valor_label"] = rank_pd["valor_total"].apply(lambda x: format_compact_brl(float(x)))
             fig_rank = px.bar(
                 rank_pd,
                 x="valor_total",
                 y="instituicao",
                 orientation="h",
                 title="Top 5 instituições por volume de poupança",
-                text="valor_total",
+                text="valor_label",
             )
             fig_rank.update_traces(
-                texttemplate="%{text:,.0f}",
+                texttemplate="%{text}",
                 textposition="outside",
                 hovertemplate="%{x:,.0f}<extra></extra>",
                 cliponaxis=False,
