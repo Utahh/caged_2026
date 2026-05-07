@@ -430,7 +430,6 @@ if not caged.is_empty():
     fig_bar.update_traces(hovertemplate="%{y:,.0f}<extra></extra>")
     st.plotly_chart(fig_bar, theme="streamlit", use_container_width=True)
 
-    st.markdown("## Top 5 Subclasses CNAE 2.0 (Março)")
     rank_subclasse = (
         c.filter(pl.col("mes_referencia") == 3)
         .group_by("CNAE 2.0 Subclasse")
@@ -465,14 +464,14 @@ if not caged.is_empty():
     )
     saldo_atividade_pd = saldo_atividade.to_pandas()
 
-    st.markdown("## Saldo por Grande Grupamento")
+    st.markdown("## Saldo por Atividade Econômica")
     fig_hbar = px.bar(
         saldo_atividade_pd,
         x="Saldo",
         y="Atividade Econômica",
         orientation="h",
         text="Saldo",
-        title="Grande grupamento com maior saldo (ordem decrescente)",
+        title="Atividade Econômica com maior saldo (ordem decrescente)",
     )
     fig_hbar.update_traces(
         texttemplate="%{text:,.0f}",
@@ -487,6 +486,7 @@ if not caged.is_empty():
     )
     st.plotly_chart(fig_hbar, theme="streamlit", use_container_width=True)
 
+    st.markdown("## Top 5 Subclasses (Março)")
     a1, a2 = st.columns(2)
     with a1:
         st.markdown("### Maiores Saldos")
@@ -504,33 +504,3 @@ if not caged.is_empty():
             hide_index=True,
             height=220,
         )
-
-st.markdown("## Assistente IA (n8n)")
-pergunta_ia = st.text_input("Pergunta para a IA", placeholder="Ex.: Compare a evolução de Serviços ao longo de 2026")
-if st.button("Enviar para IA", use_container_width=False):
-    webhook_url = st.secrets.get("N8N_WEBHOOK_URL", "")
-    if not webhook_url:
-        st.error("Defina N8N_WEBHOOK_URL em secrets para habilitar a integração.")
-    elif not pergunta_ia.strip():
-        st.warning("Digite uma pergunta antes de enviar.")
-    else:
-        dados_historicos_json = montar_contexto_ia_caged(caged)
-        payload = {
-            "pergunta": pergunta_ia.strip(),
-            "dados_contexto": dados_historicos_json,
-        }
-        try:
-            with st.spinner("Consultando assistente IA..."):
-                resp = requests.post(webhook_url, json=payload, timeout=30)
-                resp.raise_for_status()
-            try:
-                resposta = resp.json()
-                st.success("Resposta recebida do n8n.")
-                st.write(resposta)
-            except ValueError:
-                st.success("Resposta recebida do n8n.")
-                st.write(resp.text)
-        except requests.Timeout:
-            st.error("Tempo limite excedido ao consultar o webhook n8n.")
-        except requests.RequestException as exc:
-            st.error(f"Falha na integração com n8n: {exc}")
