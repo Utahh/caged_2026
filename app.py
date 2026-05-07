@@ -15,14 +15,38 @@ st.markdown(
     """
     <style>
         .stApp {background-color: #f1f5f9;}
-        .block-container {padding-top: 0.6rem; max-width: 1400px;}
+        .block-container {padding-top: 0.55rem; max-width: 1400px; padding-bottom: 1.2rem;}
+        div[data-testid="stMetric"] {
+            background: #ffffff;
+            border-radius: 12px;
+            border: 1px solid #e5e7eb;
+            padding: 0.45rem 0.65rem 0.55rem 0.65rem;
+            box-shadow: 0 1px 4px rgba(15, 23, 42, 0.05);
+        }
+        div[data-testid="stMetricLabel"] p {
+            font-size: 0.82rem !important;
+            color: #64748b !important;
+        }
+        div[data-testid="stMetricValue"] {
+            font-size: 1.55rem !important;
+            line-height: 1.05 !important;
+        }
+        div[data-testid="stMetricDelta"] {
+            font-size: 0.78rem !important;
+        }
+        .stDataFrame {background: #ffffff; border-radius: 12px; border: 1px solid #e5e7eb;}
         @media (max-width: 768px) {
+            .block-container {padding-top: 0.35rem; padding-left: 0.6rem; padding-right: 0.6rem;}
             div[data-testid="column"] {
                 width: 48% !important;
                 flex: 1 1 48% !important;
                 display: inline-block !important;
                 min-width: 48% !important;
             }
+            div[data-testid="stMetric"] {padding: 0.38rem 0.5rem 0.48rem 0.5rem;}
+            div[data-testid="stMetricLabel"] p {font-size: 0.72rem !important;}
+            div[data-testid="stMetricValue"] {font-size: 1.18rem !important;}
+            div[data-testid="stMetricDelta"] {font-size: 0.67rem !important;}
             h1 {font-size: 1.35rem !important;}
             h2, h3 {font-size: 1.05rem !important;}
         }
@@ -63,6 +87,8 @@ def estilizar_figura(fig):
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         hoverlabel=dict(bgcolor="#111827", font=dict(color="white", size=13)),
+        font=dict(size=13),
+        title=dict(font=dict(size=16)),
         margin=dict(l=10, r=10, t=60, b=20),
     )
     fig.update_xaxes(showgrid=False, zeroline=False, fixedrange=True)
@@ -342,10 +368,10 @@ if not df_caged.is_empty():
     t1, t2 = st.columns(2)
     with t1:
         st.markdown("### Top 5 Maiores")
-        st.dataframe(top_maiores.to_pandas(), use_container_width=True, hide_index=True)
+        st.dataframe(top_maiores.to_pandas(), use_container_width=True, hide_index=True, height=230)
     with t2:
         st.markdown("### Top 5 Menores")
-        st.dataframe(top_menores.to_pandas(), use_container_width=True, hide_index=True)
+        st.dataframe(top_menores.to_pandas(), use_container_width=True, hide_index=True, height=230)
 
 st.markdown("## 💰 Módulo Financeiro")
 if df_fin.is_empty():
@@ -363,7 +389,7 @@ else:
         .sort(["Mes", "Saldo_em_Reais"], descending=[False, True])
     )
     st.markdown("### Extrato Bancário")
-    st.dataframe(extrato.to_pandas(), use_container_width=True, hide_index=True)
+    st.dataframe(extrato.to_pandas(), use_container_width=True, hide_index=True, height=280)
 
     # Evolução histórica financeira
     evol_fin = (
