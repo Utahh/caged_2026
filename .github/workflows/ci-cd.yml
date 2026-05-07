@@ -62,7 +62,7 @@ jobs:
 
       - name: Commit refreshed CSVs (if changed)
         run: |
-          git add caged_botucatu_q1_2026.csv financas_botucatu_2026.csv relatorio_botucatu_q1_2026.csv investimentos_botucatu_2026.csv
+          git add caged_botucatu_q1_2026.csv financas_botucatu_2026.csv estban_botucatu_2025_2026.csv relatorio_botucatu_q1_2026.csv investimentos_botucatu_2026.csv
           if git diff --staged --quiet; then
             echo "No dataset changes to commit."
             exit 0
@@ -87,6 +87,7 @@ jobs:
           cp app.py requirements.txt README.md dist/
           if [ -f relatorio_botucatu_q1_2026.csv ]; then cp relatorio_botucatu_q1_2026.csv dist/; fi
           if [ -f investimentos_botucatu_2026.csv ]; then cp investimentos_botucatu_2026.csv dist/; fi
+          if [ -f estban_botucatu_2025_2026.csv ]; then cp estban_botucatu_2025_2026.csv dist/; fi
           tar -czf observatorio-botucatu.tar.gz dist
 
       - name: Upload artifact

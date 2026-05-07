@@ -16,8 +16,20 @@ BASE_DIR = Path(__file__).resolve().parent
 WORK_DIR = BASE_DIR / "tmp_pipeline_botucatu"
 MONTHS = ["01", "02", "03"]
 YEAR = "2026"
+FINANCIAL_YEARS = ["2025", "2026"]
 BOTUCATU_MUNICIPIO_CAGED = 350750
 BOTUCATU_ID_ENTE_SICONFI = 3507506
+POUPANCA_CODIGOS = {"111310100", "111310200"}
+MAPA_BANCOS = {
+    "111110100": "Caixa da Prefeitura",
+    "111110200": "Banco do Brasil",
+    "111110603": "Caixa Econômica Federal",
+    "111110604": "Santander / Outros",
+    "111111900": "Fundos de Investimento",
+    "111115000": "Aplicações em Renda Fixa",
+    "111310100": "Poupança Municipal",
+    "111310200": "Poupança Vinculada",
+}
 
 
 def log(msg: str) -> None:
@@ -229,11 +241,11 @@ def fetch_siconfi_json() -> Dict:
     raise NotImplementedError("Use fetch_siconfi_month_json for required parameterized calls.")
 
 
-def fetch_siconfi_month_json(month: int) -> Dict:
+def fetch_siconfi_month_json(year: str, month: int) -> Dict:
     base_url = "https://apidatalake.tesouro.gov.br/ords/siconfi/tt/msc_patrimonial"
     params = {
         "id_ente": BOTUCATU_ID_ENTE_SICONFI,
-        "an_referencia": YEAR,
+        "an_referencia": year,
         "me_referencia": month,
         "co_tipo_matriz": "MSCC",
         "classe_conta": 1,
@@ -250,7 +262,7 @@ def fetch_siconfi_month_json(month: int) -> Dict:
         return response.json()
 
     return retry_exec(
-        _do_request, attempts=3, sleep_seconds=5, context=f"requisição API Siconfi mês {month}"
+        _do_request, attempts=3, sleep_seconds=5, context=f"requisição API Siconfi {year}-{month:02d}"
     )
 
 
@@ -312,11 +324,12 @@ def enrich_caged_with_cnae_descriptions(caged: pd.DataFrame) -> pd.DataFrame:
 def run_siconfi_etl() -> pd.DataFrame:
     log("ETL Siconfi iniciado.")
     items: List[Dict] = []
-    for month in [1, 2, 3]:
-        payload = fetch_siconfi_month_json(month)
-        month_items = payload.get("items", []) if isinstance(payload, dict) else []
-        log(f"Siconfi mês {month}: {len(month_items)} registros recebidos.")
-        items.extend(month_items)
+    for year in FINANCIAL_YEARS:
+        for month in range(1, 13):
+            payload = fetch_siconfi_month_json(year, month)
+            month_items = payload.get("items", []) if isinstance(payload, dict) else []
+            log(f"Siconfi {year}-{month:02d}: {len(month_items)} registros recebidos.")
+            items.extend(month_items)
 
     if not items:
         log("Siconfi retornou JSON vazio ou sem itens.")
@@ -327,6 +340,7 @@ def run_siconfi_etl() -> pd.DataFrame:
 
     col_conta = first_present(col_map, ["conta_contabil", "co_conta_contabil", "codigo_contabil"])
     col_mes = first_present(col_map, ["mes_referencia", "me_referencia", "mes", "no_mes"])
+    col_ano = first_present(col_map, ["an_referencia", "ano_referencia", "ano"])
     col_natureza = first_present(
         col_map, ["natureza", "natureza_conta", "no_natureza_conta", "ds_natureza_conta"]
     )
@@ -343,36 +357,69 @@ def run_siconfi_etl() -> pd.DataFrame:
 
     out = pd.DataFrame(
         {
+            "Ano": pd.to_numeric(df[col_ano], errors="coerce") if col_ano else int(YEAR),
             "Mês": pd.to_numeric(df[col_mes], errors="coerce"),
             "Código Contábil": df[col_conta],
             "Natureza": df[col_natureza].astype(str).str.strip(),
             "Saldo em Reais": pd.to_numeric(df[col_saldo], errors="coerce").fillna(0),
         }
-    ).dropna(subset=["Mês"])
+    ).dropna(subset=["Mês", "Ano"])
 
+    out["Ano"] = out["Ano"].astype(int)
     out["Mês"] = out["Mês"].astype(int)
+    out["Código Contábil"] = out["Código Contábil"].astype(str).str.strip()
     out = (
-        out.groupby(["Mês", "Código Contábil", "Natureza"], as_index=False)["Saldo em Reais"]
+        out.groupby(["Ano", "Mês", "Código Contábil", "Natureza"], as_index=False)["Saldo em Reais"]
         .sum()
-        .sort_values(["Mês", "Código Contábil", "Natureza"])
+        .sort_values(["Ano", "Mês", "Código Contábil", "Natureza"])
     )
     return out
+
+
+def build_estban_like_dataset(siconfi: pd.DataFrame) -> pd.DataFrame:
+    if siconfi.empty:
+        return pd.DataFrame(columns=["Ano", "Mes", "instituicao", "valor_poupanca", "data_ref"])
+
+    fin = siconfi.copy()
+    fin["codigo_norm"] = (
+        fin["Código Contábil"].astype(str).str.replace(".", "", regex=False).str.replace("-", "", regex=False)
+    )
+    fin = fin[fin["codigo_norm"].isin(POUPANCA_CODIGOS)].copy()
+    if fin.empty:
+        return pd.DataFrame(columns=["Ano", "Mes", "instituicao", "valor_poupanca", "data_ref"])
+
+    fin["instituicao"] = fin["codigo_norm"].map(MAPA_BANCOS).fillna("Outros")
+    fin["Mes"] = pd.to_numeric(fin["Mês"], errors="coerce").fillna(0).astype(int)
+    fin["Ano"] = pd.to_numeric(fin["Ano"], errors="coerce").fillna(0).astype(int)
+
+    estban = (
+        fin.groupby(["Ano", "Mes", "instituicao"], as_index=False)["Saldo em Reais"]
+        .sum()
+        .rename(columns={"Saldo em Reais": "valor_poupanca"})
+        .sort_values(["Ano", "Mes", "instituicao"])
+    )
+    estban["data_ref"] = estban["Ano"].astype(str) + "-" + estban["Mes"].astype(str).str.zfill(2)
+    return estban
 
 
 def export_outputs(caged: pd.DataFrame, siconfi: pd.DataFrame) -> None:
     out_caged = BASE_DIR / "caged_botucatu_q1_2026.csv"
     out_fin = BASE_DIR / "financas_botucatu_2026.csv"
+    out_estban = BASE_DIR / "estban_botucatu_2025_2026.csv"
     out_caged_app = BASE_DIR / "relatorio_botucatu_q1_2026.csv"
     out_fin_app = BASE_DIR / "investimentos_botucatu_2026.csv"
 
     caged = enrich_caged_with_cnae_descriptions(caged)
     caged.to_csv(out_caged, sep=";", encoding="utf-8-sig", index=False)
     siconfi.to_csv(out_fin, sep=";", encoding="utf-8-sig", index=False, decimal=",")
+    estban = build_estban_like_dataset(siconfi)
+    estban.to_csv(out_estban, sep=";", encoding="utf-8-sig", index=False, decimal=",")
 
     # Compatibilidade com app Streamlit já criado no projeto
     caged.to_csv(out_caged_app, sep=";", encoding="utf-8-sig", index=False)
     fin_app = siconfi.rename(
         columns={
+            "Ano": "Ano",
             "Mês": "Mes",
             "Código Contábil": "Codigo_Contabil",
             "Saldo em Reais": "Saldo_em_Reais",
@@ -382,6 +429,7 @@ def export_outputs(caged: pd.DataFrame, siconfi: pd.DataFrame) -> None:
 
     log(f"Exportação CAGED concluída: {out_caged.name} ({len(caged)} linhas)")
     log(f"Exportação Finanças concluída: {out_fin.name} ({len(siconfi)} linhas)")
+    log(f"Exportação ESTBAN-like concluída: {out_estban.name} ({len(estban)} linhas)")
     log("Arquivos de compatibilidade do app também foram gerados na raiz do projeto.")
 
 

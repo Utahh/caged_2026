@@ -6,7 +6,6 @@ import fitz
 import plotly.express as px
 import plotly.graph_objects as go
 import polars as pl
-import requests
 import streamlit as st
 
 st.set_page_config(layout="wide", initial_sidebar_state="collapsed")
@@ -198,37 +197,63 @@ def gerar_pdf_caged(df_caged_completo: pl.DataFrame, mes_selecionado: int, ano: 
         doc.close()
 
 
-def montar_contexto_ia_caged(df_caged_completo: pl.DataFrame) -> list[dict]:
-    """Consolida histórico CAGED para contexto de IA sem payload gigante."""
-    if df_caged_completo.is_empty():
-        return []
+def format_mi(v: float) -> str:
+    return f"R$ {v / 1_000_000:.1f} M".replace(".", ",")
 
-    if "ano_referencia" in df_caged_completo.columns:
-        ano_expr = pl.col("ano_referencia").cast(pl.Int64).alias("ano")
-    else:
-        ano_expr = pl.lit(2026).cast(pl.Int64).alias("ano")
 
-    df_ia_contexto = (
-        df_caged_completo.with_columns(
+def processar_dados_estban(df_estban: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    if df_estban.is_empty():
+        vazio_kpi = pl.DataFrame({"valor_atual": [0.0], "delta_perc": [0.0], "data_ref": ["Sem dados"]})
+        return vazio_kpi, pl.DataFrame(), pl.DataFrame()
+
+    base = (
+        df_estban.with_columns(
             [
-                ano_expr,
-                pl.col("mes_referencia").cast(pl.Int64).alias("mes"),
-                pl.col("Atividade Econômica").cast(pl.String).alias("atividade_economica"),
-                pl.col("admissao").cast(pl.Float64).fill_null(0.0).alias("admissoes"),
-                pl.col("demissao").cast(pl.Float64).fill_null(0.0).alias("desligamentos"),
+                pl.col("valor_poupanca").cast(pl.Float64).fill_null(0.0),
+                pl.col("instituicao").cast(pl.String),
+                pl.col("data_ref").cast(pl.String),
             ]
         )
-        .group_by(["ano", "mes", "atividade_economica"])
-        .agg(
-            [
-                pl.col("admissoes").sum().alias("total_admissoes"),
-                pl.col("desligamentos").sum().alias("total_desligamentos"),
-                (pl.col("admissoes").sum() - pl.col("desligamentos").sum()).alias("saldo_liquido"),
-            ]
-        )
-        .sort(["ano", "mes", "atividade_economica"])
+        .filter(pl.col("valor_poupanca").is_not_null())
     )
-    return df_ia_contexto.to_dicts()
+
+    df_tendencia = (
+        base.group_by("data_ref")
+        .agg(pl.col("valor_poupanca").sum().alias("valor_total"))
+        .sort("data_ref")
+    )
+
+    if df_tendencia.height == 0:
+        vazio_kpi = pl.DataFrame({"valor_atual": [0.0], "delta_perc": [0.0], "data_ref": ["Sem dados"]})
+        return vazio_kpi, pl.DataFrame(), pl.DataFrame()
+
+    ref_atual = df_tendencia.select(pl.col("data_ref").max()).item()
+    valor_atual = float(
+        df_tendencia.filter(pl.col("data_ref") == ref_atual).select(pl.col("valor_total").sum()).item() or 0.0
+    )
+
+    datas = df_tendencia.select("data_ref").to_series().to_list()
+    idx_atual = datas.index(ref_atual)
+    valor_anterior = 0.0
+    if idx_atual > 0:
+        ref_ant = datas[idx_atual - 1]
+        valor_anterior = float(
+            df_tendencia.filter(pl.col("data_ref") == ref_ant).select(pl.col("valor_total").sum()).item() or 0.0
+        )
+    delta_perc = mom(valor_atual, valor_anterior)
+
+    df_kpi_atual = pl.DataFrame(
+        {"valor_atual": [valor_atual], "delta_perc": [delta_perc], "data_ref": [ref_atual]}
+    )
+
+    df_bancos_ranking = (
+        base.filter(pl.col("data_ref") == ref_atual)
+        .group_by("instituicao")
+        .agg(pl.col("valor_poupanca").sum().alias("valor_total"))
+        .sort("valor_total", descending=True)
+    )
+
+    return df_kpi_atual, df_bancos_ranking, df_tendencia
 
 
 @st.cache_data
@@ -298,6 +323,7 @@ def normalize_fin(df: pl.DataFrame) -> pl.DataFrame:
     saldo_col = "Saldo_em_Reais" if "Saldo_em_Reais" in df.columns else "Saldo em Reais"
     cod_col = "Codigo_Contabil" if "Codigo_Contabil" in df.columns else "Código Contábil"
     mes_col = "Mes" if "Mes" in df.columns else "Mês"
+    ano_col = "Ano" if "Ano" in df.columns else None
     mapa = pl.DataFrame(
         {
             "Codigo_Contabil": [
@@ -327,6 +353,7 @@ def normalize_fin(df: pl.DataFrame) -> pl.DataFrame:
             [
                 pl.col(cod_col).cast(pl.String).alias("Codigo_Contabil"),
                 pl.col(mes_col).cast(pl.Int64).alias("Mes"),
+                (pl.col(ano_col).cast(pl.Int64) if ano_col else pl.lit(2026)).alias("Ano"),
                 pl.col(saldo_col)
                 .cast(pl.String)
                 .str.replace(",", ".")
@@ -504,3 +531,87 @@ if not caged.is_empty():
             hide_index=True,
             height=220,
         )
+
+st.divider()
+st.header("Análise de Poupança Privada (ESTBAN)")
+
+if fin.is_empty():
+    st.warning("Base financeira indisponível para análise de poupança.")
+else:
+    df_estban = (
+        fin.filter(pl.col("Codigo_Contabil").is_in(POUPANCA_CODIGOS))
+        .with_columns(
+            [
+                pl.col("Instituição Financeira").alias("instituicao"),
+                pl.col("Saldo").alias("valor_poupanca"),
+                pl.format("{}-{:02d}", pl.col("Ano"), pl.col("Mes")).alias("data_ref"),
+            ]
+        )
+        .select(["instituicao", "valor_poupanca", "data_ref"])
+    )
+
+    df_kpi_atual, df_bancos_ranking, df_tendencia = processar_dados_estban(df_estban)
+    valor_atual = float(df_kpi_atual.select("valor_atual").item() or 0.0)
+    delta_perc = float(df_kpi_atual.select("delta_perc").item() or 0.0)
+    data_ref = str(df_kpi_atual.select("data_ref").item())
+
+    st.metric(
+        "Volume Total de Poupança",
+        format_mi(valor_atual),
+        format_pct(delta_perc),
+    )
+    st.caption(f"Dados de referência: {data_ref}")
+
+    col_rank, col_trend = st.columns(2)
+
+    with col_rank:
+        if df_bancos_ranking.is_empty():
+            st.info("Sem dados de ranking de instituições.")
+        else:
+            rank_pd = df_bancos_ranking.head(5).to_pandas()
+            fig_rank = px.bar(
+                rank_pd,
+                x="valor_total",
+                y="instituicao",
+                orientation="h",
+                title="Top 5 instituições por volume de poupança",
+                text="valor_total",
+            )
+            fig_rank.update_traces(
+                texttemplate="%{text:,.0f}",
+                textposition="outside",
+                hovertemplate="%{x:,.0f}<extra></extra>",
+                cliponaxis=False,
+            )
+            fig_rank.update_layout(
+                yaxis=dict(categoryorder="total ascending"),
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                xaxis_showgrid=False,
+                yaxis_showgrid=False,
+            )
+            st.plotly_chart(fig_rank, theme="streamlit", use_container_width=True)
+
+    with col_trend:
+        if df_tendencia.is_empty():
+            st.info("Sem dados históricos para tendência.")
+        else:
+            tendencia_pd = df_tendencia.to_pandas()
+            fig_trend = px.line(
+                tendencia_pd,
+                x="data_ref",
+                y="valor_total",
+                markers=True,
+                title="Evolução temporal da poupança total",
+            )
+            fig_trend.update_traces(hovertemplate="%{y:,.0f}<extra></extra>")
+            fig_trend.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig_trend, theme="streamlit", use_container_width=True)
+
+    st.caption(
+        "Fonte: Estatística Bancária por Município (ESTBAN) - Banco Central do Brasil. "
+        "Os dados podem apresentar uma defasagem de até 60 dias em relação ao mês corrente."
+    )
