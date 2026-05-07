@@ -121,7 +121,7 @@ def normalize_caged(df: pl.DataFrame) -> pl.DataFrame:
         .then(pl.lit("Serviços"))
         .otherwise(pl.lit("Não Identificado"))
     )
-    atividade = (
+    subclasse_desc = (
         pl.when(pl.col("subclasse_descricao").is_not_null())
         .then(pl.col("subclasse_descricao").cast(pl.String))
         .otherwise(pl.lit("Não Identificado"))
@@ -134,7 +134,8 @@ def normalize_caged(df: pl.DataFrame) -> pl.DataFrame:
             pl.col("saldomovimentacao").cast(pl.Float64).fill_null(0.0),
             pl.col("subclasse").cast(pl.String).str.zfill(7),
             grande.alias("Grande Grupo"),
-            atividade.alias("Atividade Econômica"),
+            grande.alias("Atividade Econômica"),
+            subclasse_desc.alias("CNAE 2.0 Subclasse"),
         ]
     )
 
@@ -278,10 +279,10 @@ if not caged.is_empty():
     fig_bar.update_traces(hovertemplate="%{y:,.0f}<extra></extra>")
     st.plotly_chart(fig_bar, theme="streamlit", use_container_width=True)
 
-    st.markdown("## Top 5 Atividades (Março)")
-    rank = (
+    st.markdown("## Top 5 Subclasses CNAE 2.0 (Março)")
+    rank_subclasse = (
         c.filter(pl.col("mes_referencia") == 3)
-        .group_by("Grande Grupo")
+        .group_by("CNAE 2.0 Subclasse")
         .agg(
             [
                 pl.col("admissao").sum().alias("Admissões"),
@@ -291,20 +292,23 @@ if not caged.is_empty():
         )
         .sort("Saldo", descending=True)
     )
-    total_saldo = float(rank.select(pl.col("Saldo").sum()).item())
-    rank = rank.with_columns(
+    total_saldo = float(rank_subclasse.select(pl.col("Saldo").sum()).item())
+    rank_subclasse = rank_subclasse.with_columns(
         pl.when(pl.lit(total_saldo != 0))
         .then((pl.col("Saldo") / pl.lit(total_saldo)) * 100)
         .otherwise(pl.lit(0.0))
         .alias("% Impacto")
     ).with_columns(
-        pl.col("Grande Grupo").str.slice(0, 42).alias("Atividade Econômica")
+        pl.col("CNAE 2.0 Subclasse").str.slice(0, 42).alias("CNAE 2.0 Subclasse")
     )
-    top_maiores = rank.head(5)
-    top_menores = rank.tail(5).sort("Saldo")
+    top_maiores = rank_subclasse.head(5)
+    top_menores = rank_subclasse.tail(5).sort("Saldo")
 
     saldo_atividade = (
-        rank.select(["Atividade Econômica", "Saldo"])
+        c.filter(pl.col("mes_referencia") == 3)
+        .group_by("Atividade Econômica")
+        .agg((pl.col("admissao").sum() - pl.col("demissao").sum()).alias("Saldo"))
+        .select(["Atividade Econômica", "Saldo"])
         .sort("Saldo", descending=True)
         .head(10)
     )
@@ -336,7 +340,7 @@ if not caged.is_empty():
     with a1:
         st.markdown("### Maiores Saldos")
         st.dataframe(
-            top_maiores.select(["Atividade Econômica", "Saldo", "Admissões", "Desligamentos", "% Impacto"]).to_pandas(),
+            top_maiores.select(["CNAE 2.0 Subclasse", "Saldo", "Admissões", "Desligamentos", "% Impacto"]).to_pandas(),
             use_container_width=True,
             hide_index=True,
             height=220,
@@ -344,7 +348,7 @@ if not caged.is_empty():
     with a2:
         st.markdown("### Menores Saldos")
         st.dataframe(
-            top_menores.select(["Atividade Econômica", "Saldo", "Admissões", "Desligamentos", "% Impacto"]).to_pandas(),
+            top_menores.select(["CNAE 2.0 Subclasse", "Saldo", "Admissões", "Desligamentos", "% Impacto"]).to_pandas(),
             use_container_width=True,
             hide_index=True,
             height=220,
