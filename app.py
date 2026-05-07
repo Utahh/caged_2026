@@ -544,7 +544,13 @@ else:
             [
                 pl.col("Instituição Financeira").alias("instituicao"),
                 pl.col("Saldo").alias("valor_poupanca"),
-                pl.format("{}-{:02d}", pl.col("Ano"), pl.col("Mes")).alias("data_ref"),
+                pl.concat_str(
+                    [
+                        pl.col("Ano").cast(pl.String),
+                        pl.lit("-"),
+                        pl.col("Mes").cast(pl.String).str.zfill(2),
+                    ]
+                ).alias("data_ref"),
             ]
         )
         .select(["instituicao", "valor_poupanca", "data_ref"])
