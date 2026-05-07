@@ -1,5 +1,8 @@
 from pathlib import Path
+import base64
+import io
 
+import fitz
 import plotly.express as px
 import plotly.graph_objects as go
 import polars as pl
@@ -77,6 +80,121 @@ def mom(atual: float, anterior: float) -> float:
 
 def path_exist(paths: list[Path]) -> Path | None:
     return next((p for p in paths if p.exists()), None)
+
+
+def format_pct(v: float) -> str:
+    return f"{v:+.1f}%".replace(".", ",")
+
+
+def gerar_pdf_caged(df_caged_completo: pl.DataFrame, mes_selecionado: int, ano: str = "2026") -> io.BytesIO:
+    meses = {
+        1: "Janeiro",
+        2: "Fevereiro",
+        3: "Março",
+        4: "Abril",
+        5: "Maio",
+        6: "Junho",
+        7: "Julho",
+        8: "Agosto",
+        9: "Setembro",
+        10: "Outubro",
+        11: "Novembro",
+        12: "Dezembro",
+    }
+
+    caged_all = df_caged_completo.filter(pl.col("mes_referencia").is_not_null())
+    caged_mes = caged_all.filter(pl.col("mes_referencia") == mes_selecionado)
+    caged_prev = caged_all.filter(pl.col("mes_referencia") == max(1, mes_selecionado - 1))
+
+    admissoes = float(caged_mes.select(pl.col("admissao").sum()).item() or 0.0)
+    desligamentos = float(caged_mes.select(pl.col("demissao").sum()).item() or 0.0)
+    saldo = admissoes - desligamentos
+
+    adm_prev = float(caged_prev.select(pl.col("admissao").sum()).item() or 0.0)
+    des_prev = float(caged_prev.select(pl.col("demissao").sum()).item() or 0.0)
+    saldo_prev = adm_prev - des_prev
+    variacao_perc = mom(saldo, saldo_prev)
+
+    setores = (
+        caged_mes.group_by("Grande Grupo")
+        .agg((pl.col("admissao").sum() - pl.col("demissao").sum()).alias("Saldo"))
+        .sort("Saldo", descending=True)
+    )
+    maior_setor = setores.item(0, "Grande Grupo") if not setores.is_empty() else "Sem dados"
+    menor_setor = setores.sort("Saldo").item(0, "Grande Grupo") if not setores.is_empty() else "Sem dados"
+
+    estoque_ativo = float(caged_all.select(pl.col("saldomovimentacao").abs().sum()).item() or 0.0)
+
+    if "ano_referencia" in caged_all.columns:
+        caged_ano = caged_all.filter(
+            (pl.col("ano_referencia").cast(pl.String) == str(ano)) & (pl.col("mes_referencia") <= mes_selecionado)
+        )
+    else:
+        caged_ano = caged_all.filter(pl.col("mes_referencia") <= mes_selecionado)
+    novos_empregos = float(caged_ano.select(pl.col("saldomovimentacao").abs().sum()).item() or 0.0)
+
+    payload = {
+        "mes_ano": f"{meses.get(mes_selecionado, str(mes_selecionado))} de {ano}",
+        "admissoes": br_int(admissoes),
+        "desligamentos": br_int(desligamentos),
+        "saldo": f"{saldo:+.0f}",
+        "variacao_perc": format_pct(variacao_perc),
+        "maior_setor": str(maior_setor),
+        "menor_setor": str(menor_setor),
+        "estoque_ativo": br_int(estoque_ativo),
+        "novos_empregos": br_int(novos_empregos),
+    }
+
+    caixas = {
+        "mes_ano": fitz.Rect(373, 389 - 25, 600, 389 + 10),
+        "admissoes": fitz.Rect(92, 484 - 25, 179, 484 + 10),
+        "desligamentos": fitz.Rect(235, 484 - 25, 334, 484 + 10),
+        "saldo": fitz.Rect(383, 484 - 25, 473, 484 + 10),
+        "variacao_perc": fitz.Rect(527, 484 - 25, 724, 484 + 10),
+        "maior_setor": fitz.Rect(92, 726 - 25, 179, 726 + 10),
+        "menor_setor": fitz.Rect(235, 726 - 25, 334, 726 + 10),
+        "estoque_ativo": fitz.Rect(382, 726 - 25, 473, 726 + 10),
+        "novos_empregos": fitz.Rect(527, 726 - 25, 724, 726 + 10),
+    }
+
+    root = Path(__file__).resolve().parent
+    template_path = root / "template_caged.pdf"
+    template_b64_path = root / "template_caged.b64"
+    if template_path.exists():
+        doc = fitz.open(template_path)
+    elif template_b64_path.exists():
+        pdf_bytes = base64.b64decode(template_b64_path.read_text(encoding="utf-8"))
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    else:
+        raise FileNotFoundError("template_caged.pdf não encontrado na raiz do projeto.")
+    try:
+        page = doc[0]
+        for chave, rect in caixas.items():
+            texto = str(payload.get(chave, ""))
+            fontsize = 14
+            if chave in {"maior_setor", "menor_setor"}:
+                if len(texto) > 28:
+                    fontsize = 9
+                elif len(texto) > 20:
+                    fontsize = 10
+                else:
+                    fontsize = 11
+
+            page.insert_textbox(
+                rect,
+                texto,
+                fontsize=fontsize,
+                fontname="helv",
+                color=(0.2, 0.2, 0.2),
+                align=fitz.TEXT_ALIGN_CENTER,
+            )
+
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+        return buffer
+    finally:
+        doc.close()
 
 
 @st.cache_data
@@ -209,8 +327,42 @@ with menu_l:
         )
         grupo = st.selectbox("Atividade Econômica", grupos, index=0)
 with menu_r:
-    if st.button("📤", help="Exportar relatório PDF", use_container_width=True):
-        st.info("Exportação PDF em breve.")
+    if caged.is_empty():
+        st.button("📤", help="Sem base CAGED para exportação", use_container_width=True, disabled=True)
+    else:
+        try:
+            pdf_buffer_top = gerar_pdf_caged(caged, month, ano="2026")
+            st.download_button(
+                "📤",
+                data=pdf_buffer_top.getvalue(),
+                file_name=f"Relatorio_CAGED_{month}_2026.pdf",
+                mime="application/pdf",
+                help="Exportar relatório PDF",
+                use_container_width=True,
+            )
+        except FileNotFoundError:
+            st.button("📤", help="Template template_caged.pdf não encontrado", use_container_width=True, disabled=True)
+        except Exception:
+            st.button("📤", help="Erro ao gerar PDF", use_container_width=True, disabled=True)
+
+with st.sidebar:
+    st.markdown("### Exportar Relatório")
+    if caged.is_empty():
+        st.caption("Sem base CAGED para gerar PDF.")
+    else:
+        try:
+            pdf_buffer = gerar_pdf_caged(caged, month, ano="2026")
+            st.download_button(
+                "Baixar PDF CAGED",
+                data=pdf_buffer.getvalue(),
+                file_name=f"Relatorio_CAGED_{month}_2026.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        except FileNotFoundError:
+            st.error("Template template_caged.pdf não encontrado na raiz do projeto.")
+        except Exception as exc:
+            st.error(f"Erro ao gerar PDF: {exc}")
 
 if not caged.is_empty():
     c = caged.filter(pl.col("mes_referencia").is_in([1, 2, 3]))

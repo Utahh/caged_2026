@@ -4,3 +4,4 @@ polars
 plotly
 requests
 py7zr
+pymupdf
