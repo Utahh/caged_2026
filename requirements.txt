@@ -1,5 +1,6 @@
 streamlit
 pandas
+polars
 plotly
 requests
 py7zr
