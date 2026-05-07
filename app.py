@@ -197,10 +197,19 @@ fin = normalize_fin(fin_raw)
 
 st.title("📊 Dashboard Executivo Março 2026")
 
-with st.sidebar.expander("Filtros", expanded=True):
-    month = st.selectbox("Mês", [1, 2, 3], format_func=lambda m: MESES[m], index=2)
-    grupos = ["Todos"] + sorted(caged.select(pl.col("Grande Grupo").unique()).to_series().drop_nulls().to_list()) if not caged.is_empty() else ["Todos"]
-    grupo = st.selectbox("Atividade Econômica", grupos, index=0)
+menu_l, menu_r = st.columns([9, 1])
+with menu_l:
+    with st.popover("☰ Filtros"):
+        month = st.selectbox("Mês", [1, 2, 3], format_func=lambda m: MESES[m], index=2)
+        grupos = (
+            ["Todos"] + sorted(caged.select(pl.col("Grande Grupo").unique()).to_series().drop_nulls().to_list())
+            if not caged.is_empty()
+            else ["Todos"]
+        )
+        grupo = st.selectbox("Atividade Econômica", grupos, index=0)
+with menu_r:
+    if st.button("📤", help="Exportar relatório PDF", use_container_width=True):
+        st.info("Exportação PDF em breve.")
 
 if not caged.is_empty():
     c = caged.filter(pl.col("mes_referencia").is_in([1, 2, 3]))
@@ -241,13 +250,32 @@ if not caged.is_empty():
 
     st.markdown("## Evolução Mensal CAGED")
     fig_line = go.Figure()
-    fig_line.add_trace(go.Scatter(x=monthly_pd["Mês"], y=monthly_pd["Admissões"], mode="lines+markers", name="Admissões"))
-    fig_line.add_trace(go.Scatter(x=monthly_pd["Mês"], y=monthly_pd["Desligamentos"], mode="lines+markers", name="Desligamentos"))
+    fig_line.add_trace(
+        go.Scatter(
+            x=monthly_pd["Mês"],
+            y=monthly_pd["Admissões"],
+            mode="lines+markers",
+            name="Admissões",
+            line=dict(color="#2563eb", width=3),
+            hovertemplate="%{x}<br>%{y:,.0f}<extra></extra>",
+        )
+    )
+    fig_line.add_trace(
+        go.Scatter(
+            x=monthly_pd["Mês"],
+            y=monthly_pd["Desligamentos"],
+            mode="lines+markers",
+            name="Desligamentos",
+            line=dict(color="#1e3a8a", width=3),
+            hovertemplate="%{x}<br>%{y:,.0f}<extra></extra>",
+        )
+    )
     fig_line.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", title="Admissões x Desligamentos")
     st.plotly_chart(fig_line, theme="streamlit", use_container_width=True)
 
     fig_bar = px.bar(monthly_pd, x="Mês", y="Saldo", title="Evolução do Saldo Mensal")
     fig_bar.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
+    fig_bar.update_traces(hovertemplate="%{y:,.0f}<extra></extra>")
     st.plotly_chart(fig_bar, theme="streamlit", use_container_width=True)
 
     st.markdown("## Top 5 Atividades (Março)")
@@ -269,6 +297,8 @@ if not caged.is_empty():
         .then((pl.col("Saldo") / pl.lit(total_saldo)) * 100)
         .otherwise(pl.lit(0.0))
         .alias("% Impacto")
+    ).with_columns(
+        pl.col("Atividade Econômica").str.slice(0, 42).alias("Atividade Econômica")
     )
     top_maiores = rank.head(5)
     top_menores = rank.tail(5).sort("Saldo")
@@ -276,48 +306,17 @@ if not caged.is_empty():
     a1, a2 = st.columns(2)
     with a1:
         st.markdown("### Maiores Saldos")
-        st.dataframe(top_maiores.to_pandas(), use_container_width=True, hide_index=True)
+        st.dataframe(
+            top_maiores.select(["Atividade Econômica", "Saldo", "Admissões", "Desligamentos", "% Impacto"]).to_pandas(),
+            use_container_width=True,
+            hide_index=True,
+            height=220,
+        )
     with a2:
         st.markdown("### Menores Saldos")
-        st.dataframe(top_menores.to_pandas(), use_container_width=True, hide_index=True)
-
-st.markdown("## 💰 Módulo Financeiro")
-if fin.is_empty():
-    st.warning("⚠️ Base financeira indisponível.")
-else:
-    fin_3 = fin.filter(pl.col("Mes").is_in([1, 2, 3]))
-    extrato = (
-        fin_3.select(["Mes", "Instituição Financeira", "Saldo"])
-        .sort(["Mes", "Saldo"], descending=[False, True])
-        .with_columns(
-            [
-                pl.col("Mes").replace_strict(MESES).alias("Mês"),
-                pl.col("Saldo").map_elements(br_money, return_dtype=pl.String),
-            ]
+        st.dataframe(
+            top_menores.select(["Atividade Econômica", "Saldo", "Admissões", "Desligamentos", "% Impacto"]).to_pandas(),
+            use_container_width=True,
+            hide_index=True,
+            height=220,
         )
-        .select(["Mês", "Instituição Financeira", "Saldo"])
-    )
-    st.markdown("### Extrato Bancário")
-    st.dataframe(extrato.to_pandas(), use_container_width=True, hide_index=True)
-
-    evol_fin = (
-        fin_3.group_by("Mes")
-        .agg(pl.col("Saldo").sum().alias("Saldo Total"))
-        .sort("Mes")
-        .with_columns(pl.col("Mes").replace_strict(MESES).alias("Mês"))
-    )
-    evol_fin_pd = evol_fin.to_pandas()
-    fig_fin = px.line(evol_fin_pd, x="Mês", y="Saldo Total", markers=True, title="Evolução Histórica do Saldo Total")
-    fig_fin.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-    st.plotly_chart(fig_fin, theme="streamlit", use_container_width=True)
-
-    poup = fin_3.filter(pl.col("Codigo_Contabil").is_in(POUPANCA_CODIGOS))
-    total_poup = float(poup.select(pl.col("Saldo").sum()).item()) if not poup.is_empty() else 0.0
-    poup_bancos = (
-        poup.group_by("Instituição Financeira")
-        .agg(pl.col("Saldo").sum().alias("Saldo"))
-        .sort("Saldo", descending=True)
-    )
-    bancos_txt = ", ".join(poup_bancos.select("Instituição Financeira").to_series().to_list()) if not poup_bancos.is_empty() else "Sem dados"
-    st.metric("Total investido em Poupança", br_money(total_poup))
-    st.info(f"Maior volume em poupança está em: **{bancos_txt}**")
