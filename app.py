@@ -27,7 +27,7 @@ st.markdown(
             }
         }
         .stApp { background-color: var(--bg-color); color: var(--text-color); }
-        .block-container { padding-top: 0.5rem; max-width: 1400px; }
+        .block-container { padding-top: 1.2rem; max-width: 1400px; }
         h1, h2, h3, p, label, span, div { color: inherit; }
         div[data-testid="stMetric"] {
             background: var(--card-color);
@@ -302,6 +302,35 @@ if not caged.is_empty():
     )
     top_maiores = rank.head(5)
     top_menores = rank.tail(5).sort("Saldo")
+
+    saldo_atividade = (
+        rank.select(["Atividade Econômica", "Saldo"])
+        .sort("Saldo", descending=True)
+        .head(10)
+    )
+    saldo_atividade_pd = saldo_atividade.to_pandas()
+
+    st.markdown("## Saldo por Atividade Econômica")
+    fig_hbar = px.bar(
+        saldo_atividade_pd,
+        x="Saldo",
+        y="Atividade Econômica",
+        orientation="h",
+        text="Saldo",
+        title="Atividades com maior saldo (ordem decrescente)",
+    )
+    fig_hbar.update_traces(
+        texttemplate="%{text:,.0f}",
+        textposition="outside",
+        hovertemplate="%{x:,.0f}<extra></extra>",
+        cliponaxis=False,
+    )
+    fig_hbar.update_layout(
+        yaxis=dict(categoryorder="total ascending"),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+    )
+    st.plotly_chart(fig_hbar, theme="streamlit", use_container_width=True)
 
     a1, a2 = st.columns(2)
     with a1:
