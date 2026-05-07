@@ -281,7 +281,7 @@ if not caged.is_empty():
     st.markdown("## Top 5 Atividades (Março)")
     rank = (
         c.filter(pl.col("mes_referencia") == 3)
-        .group_by("Atividade Econômica")
+        .group_by("Grande Grupo")
         .agg(
             [
                 pl.col("admissao").sum().alias("Admissões"),
@@ -298,7 +298,7 @@ if not caged.is_empty():
         .otherwise(pl.lit(0.0))
         .alias("% Impacto")
     ).with_columns(
-        pl.col("Atividade Econômica").str.slice(0, 42).alias("Atividade Econômica")
+        pl.col("Grande Grupo").str.slice(0, 42).alias("Atividade Econômica")
     )
     top_maiores = rank.head(5)
     top_menores = rank.tail(5).sort("Saldo")
@@ -310,14 +310,14 @@ if not caged.is_empty():
     )
     saldo_atividade_pd = saldo_atividade.to_pandas()
 
-    st.markdown("## Saldo por Atividade Econômica")
+    st.markdown("## Saldo por Grande Grupamento")
     fig_hbar = px.bar(
         saldo_atividade_pd,
         x="Saldo",
         y="Atividade Econômica",
         orientation="h",
         text="Saldo",
-        title="Atividades com maior saldo (ordem decrescente)",
+        title="Grande grupamento com maior saldo (ordem decrescente)",
     )
     fig_hbar.update_traces(
         texttemplate="%{text:,.0f}",
