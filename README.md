@@ -1,3 +1,13 @@
+---
+title: Observatório Botucatu
+emoji: 📊
+colorFrom: blue
+colorTo: green
+sdk: streamlit
+app_file: app.py
+pinned: false
+---
+
 # Observatório Botucatu (MVP)
 
 Painel web interativo construído com Streamlit e Plotly para acompanhamento de dados econômicos e financeiros de Botucatu/SP.
