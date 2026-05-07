@@ -10,8 +10,40 @@ st.set_page_config(layout="wide", initial_sidebar_state="collapsed")
 st.markdown(
     """
     <style>
-        .stApp { background-color: #f1f5f9; }
+        :root {
+            --bg-color: #f1f5f9;
+            --card-color: #ffffff;
+            --text-color: #0f172a;
+            --muted-color: #475569;
+            --border-color: #e2e8f0;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-color: #0b1220;
+                --card-color: #111827;
+                --text-color: #e5e7eb;
+                --muted-color: #cbd5e1;
+                --border-color: #334155;
+            }
+        }
+        .stApp { background-color: var(--bg-color); color: var(--text-color); }
         .block-container { padding-top: 0.5rem; max-width: 1400px; }
+        h1, h2, h3, p, label, span, div { color: inherit; }
+        div[data-testid="stMetric"] {
+            background: var(--card-color);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 0.4rem 0.6rem 0.5rem 0.6rem;
+        }
+        div[data-testid="stMetricLabel"] p { color: var(--muted-color) !important; }
+        div[data-testid="stMetricValue"] { color: var(--text-color) !important; }
+        div[data-testid="stMetricDelta"] { color: inherit !important; }
+        div[data-testid="stDataFrame"] {
+            background: var(--card-color);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+        }
         @media (max-width: 768px) {
             div[data-testid="column"] {
                 width: 48% !important;
