@@ -18,6 +18,14 @@ st.markdown(
         .block-container {padding-top: 0.75rem; padding-bottom: 1rem; max-width: 1400px;}
         .kpi-label {color: #6b7280; font-size: 0.95rem;}
         .kpi-value {color: #1a237e; font-size: 2.4rem; font-weight: 700; line-height: 1;}
+        .kpi-grid {display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; margin-bottom: 0.25rem;}
+        .kpi-card {background: #ffffff; border-radius: 12px; padding: 0.85rem 0.9rem; box-shadow: 0 1px 4px rgba(2, 6, 23, 0.06);}
+        .kpi-card .title {color: #6b7280; font-size: 0.82rem; margin-bottom: 0.3rem;}
+        .kpi-card .value {color: #1a237e; font-size: clamp(1.25rem, 3vw, 2.1rem); font-weight: 700; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+        .kpi-card .delta {font-size: 0.78rem; margin-top: 0.25rem; font-weight: 600;}
+        .delta-up {color: #16a34a;}
+        .delta-down {color: #dc2626;}
+        .delta-neutral {color: #6b7280;}
         .stDataFrame thead tr th {font-size: 0.75rem !important; color: #6b7280 !important;}
         [data-testid="stMetricValue"] {font-size: 2rem;}
         [data-testid="stMetricLabel"] {font-size: 0.9rem;}
@@ -26,6 +34,11 @@ st.markdown(
         }
         @media (max-width: 768px) {
             .block-container {padding-top: 0.35rem; padding-left: 0.6rem; padding-right: 0.6rem;}
+            .kpi-grid {grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem;}
+            .kpi-card {padding: 0.65rem 0.7rem;}
+            .kpi-card .title {font-size: 0.73rem;}
+            .kpi-card .value {font-size: clamp(1.05rem, 6vw, 1.45rem);}
+            .kpi-card .delta {font-size: 0.68rem;}
             h1 {font-size: 1.35rem !important; line-height: 1.25 !important;}
             h2, h3 {font-size: 1.05rem !important; line-height: 1.25 !important;}
             [data-testid="stMetricValue"] {font-size: 1.35rem !important;}
@@ -292,12 +305,42 @@ if not df_caged.empty:
     saldo_ant = df_mes_ant["saldomovimentacao"].sum()
 
     st.markdown("## Indicadores-chave")
-    k1, k2 = st.columns(2)
-    k3, k4 = st.columns(2)
-    k1.metric("Admissões", formatar_inteiro_br(adm), f"{variacao_percentual_mom(adm, adm_ant):+.1f}%")
-    k2.metric("Desligamentos", formatar_inteiro_br(des), f"{variacao_percentual_mom(des, des_ant):+.1f}%", delta_color="inverse")
-    k3.metric("Saldo", formatar_inteiro_br(saldo), f"{variacao_percentual_mom(saldo, saldo_ant):+.1f}%")
-    k4.metric("Estoque", formatar_inteiro_br(estoque))
+    delta_adm = variacao_percentual_mom(adm, adm_ant)
+    delta_des = variacao_percentual_mom(des, des_ant)
+    delta_saldo = variacao_percentual_mom(saldo, saldo_ant)
+
+    def classe_delta(valor: float, inverse: bool = False) -> str:
+        if valor == 0:
+            return "delta-neutral"
+        if inverse:
+            return "delta-up" if valor < 0 else "delta-down"
+        return "delta-up" if valor > 0 else "delta-down"
+
+    kpi_html = f"""
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="title">Admissões</div>
+        <div class="value">{formatar_inteiro_br(adm)}</div>
+        <div class="delta {classe_delta(delta_adm)}">{delta_adm:+.1f}% vs mês anterior</div>
+      </div>
+      <div class="kpi-card">
+        <div class="title">Desligamentos</div>
+        <div class="value">{formatar_inteiro_br(des)}</div>
+        <div class="delta {classe_delta(delta_des, inverse=True)}">{delta_des:+.1f}% vs mês anterior</div>
+      </div>
+      <div class="kpi-card">
+        <div class="title">Saldo</div>
+        <div class="value">{formatar_inteiro_br(saldo)}</div>
+        <div class="delta {classe_delta(delta_saldo)}">{delta_saldo:+.1f}% vs mês anterior</div>
+      </div>
+      <div class="kpi-card">
+        <div class="title">Estoque</div>
+        <div class="value">{formatar_inteiro_br(estoque)}</div>
+        <div class="delta delta-neutral">Jan-Mar/2026</div>
+      </div>
+    </div>
+    """
+    st.markdown(kpi_html, unsafe_allow_html=True)
 
     st.markdown("## Evolução")
     evol = dff.groupby("mes_referencia", as_index=False)[["admissao", "demissao", "saldomovimentacao"]].sum()
