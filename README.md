@@ -12,6 +12,21 @@ pinned: false
 
 Painel web interativo construído com Streamlit e Plotly para acompanhamento de dados econômicos e financeiros de Botucatu/SP.
 
+## Estrutura sugerida do projeto
+
+```text
+.
+├── app.py                          # Entry-point do Streamlit (deploy)
+├── pipeline_botucatu.py            # Entry-point do ETL
+├── data/                           # Espaço para datasets e artefatos
+├── scripts/                        # Scripts operacionais (ex.: run_pipeline.py)
+├── src/                            # Módulos reutilizáveis (expansão futura)
+├── .github/workflows/              # CI/CD
+└── .streamlit/                     # Configuração do Streamlit
+```
+
+Essa organização mantém compatibilidade total com o deploy atual, sem quebrar caminhos de execução existentes.
+
 ## Arquivos esperados
 
 Mantenha estes arquivos na mesma pasta:
