@@ -277,7 +277,7 @@ def format_brl_full(v: float) -> str:
 
 
 def processar_kpis_financeiros(
-    df_fin: pl.DataFrame, mes_atual: int, ano_atual: int
+    df_fin: pl.DataFrame, mes_atual: int, ano_atual: int, instituicao_filtro: str = "Todas"
 ) -> tuple[dict, pl.DataFrame, pl.DataFrame]:
     if df_fin.is_empty():
         vazio = {
@@ -306,6 +306,11 @@ def processar_kpis_financeiros(
         ]
     )
 
+    # Evita referência futura: nunca passar do mês/ano corrente.
+    hoje = date.today()
+    ord_hoje = hoje.year * 12 + hoje.month
+    base = base.with_columns((pl.col("Ano") * 12 + pl.col("Mes")).alias("ord_mes")).filter(pl.col("ord_mes") <= ord_hoje)
+
     tot_mes = (
         base.group_by(["Ano", "Mes"])
         .agg(pl.col("Saldo_em_Reais").sum().alias("Saldo_Total"))
@@ -314,47 +319,43 @@ def processar_kpis_financeiros(
     tot_mes_valid = tot_mes.filter(pl.col("Saldo_Total") > 0)
     if not tot_mes_valid.is_empty():
         ultimo = tot_mes_valid.tail(1)
-        ano_atual = int(ultimo.select("Ano").item())
-        mes_atual = int(ultimo.select("Mes").item())
+        ano_atual = int(ultimo.row(0)[0])
+        mes_atual = int(ultimo.row(0)[1])
 
     atual = base.filter((pl.col("Ano") == ano_atual) & (pl.col("Mes") == mes_atual))
+    if instituicao_filtro != "Todas":
+        atual = atual.filter(pl.col("Instituicao") == instituicao_filtro)
     total_dinheiro = float(atual.select(pl.col("Saldo_em_Reais").sum()).item() or 0.0)
     total_poupanca = float(
         atual.filter(pl.col("Tipo_Conta") == "Poupança").select(pl.col("Saldo_em_Reais").sum()).item() or 0.0
     )
 
     distribuicao_bancos = (
-        atual.group_by("Instituicao")
+        base.filter((pl.col("Ano") == ano_atual) & (pl.col("Mes") == mes_atual))
+        .group_by("Instituicao")
         .agg(pl.col("Saldo_em_Reais").sum().alias("Total"))
         .sort("Total", descending=True)
     )
-    instituicao_top_1 = str(distribuicao_bancos.row(0)[0]) if not distribuicao_bancos.is_empty() else "Sem dados"
+    instituicao_top_1 = (
+        instituicao_filtro
+        if instituicao_filtro != "Todas"
+        else (str(distribuicao_bancos.row(0)[0]) if not distribuicao_bancos.is_empty() else "Sem dados")
+    )
 
     ord_atual = ano_atual * 12 + mes_atual
     evolucao_12_meses = (
-        base.with_columns((pl.col("Ano") * 12 + pl.col("Mes")).alias("ord_mes"))
+        base
         .filter((pl.col("ord_mes") >= ord_atual - 11) & (pl.col("ord_mes") <= ord_atual))
+        .filter(pl.lit(instituicao_filtro == "Todas") | (pl.col("Instituicao") == instituicao_filtro))
         .group_by(["Ano", "Mes"])
         .agg(pl.col("Saldo_em_Reais").sum().alias("Total"))
         .sort(["Ano", "Mes"])
     )
 
-    saldo_ano_anterior = (
-        base.filter((pl.col("Ano") == ano_atual - 1) & (pl.col("Mes") == mes_atual))
-        .select(pl.col("Saldo_em_Reais").sum())
-        .item()
-    )
-    saldo_ano_anterior = float(saldo_ano_anterior) if saldo_ano_anterior is not None else None
-    variacao_yoy = None
-    if saldo_ano_anterior is not None and saldo_ano_anterior != 0:
-        variacao_yoy = mom(total_dinheiro, float(saldo_ano_anterior))
-
     kpis = {
         "total_dinheiro": total_dinheiro,
         "total_poupanca": total_poupanca,
         "instituicao_top_1": instituicao_top_1,
-        "saldo_ano_anterior": saldo_ano_anterior,
-        "variacao_yoy": variacao_yoy,
         "mes_atual": mes_atual,
         "ano_atual": ano_atual,
     }
@@ -750,15 +751,21 @@ try:
     if fin.is_empty():
         st.warning("Base financeira indisponível para análise de liquidez.")
     else:
-        kpis_fin, evolucao_12_meses, distribuicao_bancos = processar_kpis_financeiros(fin, month, ano)
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Total em Caixa/Aplicações", format_mi(kpis_fin["total_dinheiro"]))
+        instituicoes_disponiveis = (
+            ["Todas"]
+            + sorted(fin.select(pl.col("Instituição Financeira").unique()).to_series().drop_nulls().to_list())
+        )
+        instituicao_filtro = st.session_state.get("instituicao_filtro", "Todas")
+        if instituicao_filtro not in instituicoes_disponiveis:
+            instituicao_filtro = "Todas"
+
+        kpis_fin, evolucao_12_meses, distribuicao_bancos = processar_kpis_financeiros(
+            fin, month, ano, instituicao_filtro
+        )
+        k1, k2, k3 = st.columns([1.2, 1.2, 2.2])
+        k1.metric("Total em Caixa/Aplicações", format_brl_full(kpis_fin["total_dinheiro"]))
         k2.metric("Total em Poupança", format_brl_full(kpis_fin["total_poupanca"]))
         k3.metric("Maior Concentração", kpis_fin["instituicao_top_1"])
-        if kpis_fin["variacao_yoy"] is None:
-            k4.metric("Comparativo Anual (YoY)", "Sem base", "N/D")
-        else:
-            k4.metric("Comparativo Anual (YoY)", format_brl_full(kpis_fin["total_dinheiro"]), format_pct(kpis_fin["variacao_yoy"]))
 
         st.caption(
             f"Dados de referência: {MESES.get(kpis_fin['mes_atual'], str(kpis_fin['mes_atual']))} de {kpis_fin['ano_atual']}"
@@ -796,7 +803,7 @@ try:
                     plot_bgcolor="rgba(0,0,0,0)",
                     paper_bgcolor="rgba(0,0,0,0)",
                     xaxis=dict(showgrid=False, nticks=6),
-                    yaxis=dict(showgrid=False, tickformat="~s", tickprefix="R$ "),
+                    yaxis=dict(showgrid=False),
                 )
                 st.plotly_chart(fig_evo, theme="streamlit", use_container_width=True)
 
@@ -806,16 +813,18 @@ try:
             else:
                 dist_pd = distribuicao_bancos.to_pandas()
                 dist_pd["Total BRL"] = dist_pd["Total"].apply(lambda x: format_brl_full(float(x)))
+                dist_pd["Total Label"] = dist_pd["Total BRL"]
                 fig_dist = px.bar(
                     dist_pd,
                     x="Total",
                     y="Instituicao",
                     orientation="h",
                     title="Saldo por Instituição",
-                    text_auto=".2s",
+                    text="Total Label",
                     labels={"Total": "Total", "Instituicao": "Instituição"},
                 )
                 fig_dist.update_traces(
+                    textposition="outside",
                     hovertemplate="%{y}<br>%{customdata}<extra></extra>",
                     customdata=dist_pd["Total BRL"],
                 )
@@ -824,8 +833,31 @@ try:
                     xaxis=dict(visible=False, showgrid=False),
                     plot_bgcolor="rgba(0,0,0,0)",
                     paper_bgcolor="rgba(0,0,0,0)",
+                    margin=dict(r=110),
                 )
-                st.plotly_chart(fig_dist, theme="streamlit", use_container_width=True)
+                evt = st.plotly_chart(
+                    fig_dist,
+                    theme="streamlit",
+                    use_container_width=True,
+                    on_select="rerun",
+                    selection_mode="points",
+                )
+                try:
+                    points = evt.get("selection", {}).get("points", []) if isinstance(evt, dict) else []
+                    if points:
+                        y_val = points[0].get("y")
+                        if y_val:
+                            st.session_state["instituicao_filtro"] = str(y_val)
+                    elif "instituicao_filtro" not in st.session_state:
+                        st.session_state["instituicao_filtro"] = "Todas"
+                except Exception:
+                    pass
+                st.selectbox(
+                    "Instituição (filtro)",
+                    instituicoes_disponiveis,
+                    key="instituicao_filtro",
+                    help="Toque na barra ou selecione manualmente.",
+                )
 
         st.caption(
             "Fonte: dados financeiros municipais (Siconfi/ESTBAN-like) consolidados para Botucatu. "
