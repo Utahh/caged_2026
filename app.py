@@ -249,6 +249,29 @@ def format_data_ref_extenso(data_ref: str) -> str:
         return data_ref
 
 
+def format_data_ref_curta(data_ref: str) -> str:
+    try:
+        ano_txt, mes_txt = data_ref.split("-")
+        mes_num = int(mes_txt)
+        meses_curto = {
+            1: "Jan",
+            2: "Fev",
+            3: "Mar",
+            4: "Abr",
+            5: "Mai",
+            6: "Jun",
+            7: "Jul",
+            8: "Ago",
+            9: "Set",
+            10: "Out",
+            11: "Nov",
+            12: "Dez",
+        }
+        return f"{meses_curto.get(mes_num, mes_txt)}/{str(ano_txt)[-2:]}"
+    except Exception:
+        return data_ref
+
+
 def format_brl_full(v: float) -> str:
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
@@ -510,35 +533,53 @@ if not caged.is_empty():
         )
     )
     monthly_pd = monthly.to_pandas()
+    monthly_pd["Mês Curto"] = monthly_pd.apply(
+        lambda r: format_data_ref_curta(f"{int(r['ano_referencia'])}-{int(r['mes_referencia']):02d}"),
+        axis=1,
+    )
+    monthly_pd["Admissões_BR"] = monthly_pd["Admissões"].apply(lambda v: br_int(float(v)))
+    monthly_pd["Desligamentos_BR"] = monthly_pd["Desligamentos"].apply(lambda v: br_int(float(v)))
+    monthly_pd["Saldo_BR"] = monthly_pd["Saldo"].apply(lambda v: br_int(float(v)))
 
     st.markdown("## Evolução Mensal CAGED")
     fig_line = go.Figure()
     fig_line.add_trace(
         go.Scatter(
-            x=monthly_pd["Mês"],
+            x=monthly_pd["Mês Curto"],
             y=monthly_pd["Admissões"],
             mode="lines+markers",
             name="Admissões",
             line=dict(color="#2563eb", width=3),
-            hovertemplate="%{x}<br>%{y:,.0f}<extra></extra>",
+            customdata=monthly_pd[["Mês", "Admissões_BR"]].values,
+            hovertemplate="%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
         )
     )
     fig_line.add_trace(
         go.Scatter(
-            x=monthly_pd["Mês"],
+            x=monthly_pd["Mês Curto"],
             y=monthly_pd["Desligamentos"],
             mode="lines+markers",
             name="Desligamentos",
             line=dict(color="#1e3a8a", width=3),
-            hovertemplate="%{x}<br>%{y:,.0f}<extra></extra>",
+            customdata=monthly_pd[["Mês", "Desligamentos_BR"]].values,
+            hovertemplate="%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
         )
     )
-    fig_line.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", title="Admissões x Desligamentos")
+    fig_line.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        title="Admissões x Desligamentos",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        xaxis=dict(nticks=6),
+    )
     st.plotly_chart(fig_line, theme="streamlit", use_container_width=True)
 
-    fig_bar = px.bar(monthly_pd, x="Mês", y="Saldo", title="Evolução do Saldo Mensal")
+    fig_bar = px.bar(monthly_pd, x="Mês Curto", y="Saldo", title="Evolução do Saldo Mensal")
     fig_bar.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-    fig_bar.update_traces(hovertemplate="%{y:,.0f}<extra></extra>")
+    fig_bar.update_traces(
+        customdata=monthly_pd[["Mês", "Saldo_BR"]].values,
+        hovertemplate="%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
+    )
     st.plotly_chart(fig_bar, theme="streamlit", use_container_width=True)
 
     rank_subclasse = (
@@ -647,64 +688,67 @@ else:
 
     st.metric(
         "Volume Total de Poupança",
-        format_compact_brl(valor_atual),
+        format_brl_full(valor_atual),
         format_pct(delta_perc),
     )
     st.caption(f"Dados de referência: {format_data_ref_extenso(data_ref)}")
 
-    col_rank, col_trend = st.columns(2)
+    if df_bancos_ranking.is_empty():
+        st.info("Sem dados de ranking de instituições.")
+    else:
+        rank_pd = df_bancos_ranking.head(5).to_pandas()
+        rank_pd["valor_label"] = rank_pd["valor_total"].apply(lambda x: format_compact_brl(float(x)))
+        fig_rank = px.bar(
+            rank_pd,
+            x="valor_total",
+            y="instituicao",
+            orientation="h",
+            title="Top 5 instituições por volume de poupança",
+            text="valor_label",
+            labels={"valor_total": "Total", "instituicao": "Instituição"},
+        )
+        fig_rank.update_traces(
+            texttemplate="%{text}",
+            textposition="outside",
+            hovertemplate="%{customdata}<extra></extra>",
+            customdata=rank_pd["valor_total"].apply(lambda x: format_brl_full(float(x))).to_list(),
+            cliponaxis=False,
+        )
+        fig_rank.update_layout(
+            yaxis=dict(categoryorder="total ascending"),
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            xaxis_showgrid=False,
+            yaxis_showgrid=False,
+            margin=dict(r=80),
+        )
+        st.plotly_chart(fig_rank, theme="streamlit", use_container_width=True)
 
-    with col_rank:
-        if df_bancos_ranking.is_empty():
-            st.info("Sem dados de ranking de instituições.")
-        else:
-            rank_pd = df_bancos_ranking.head(5).to_pandas()
-            rank_pd["valor_label"] = rank_pd["valor_total"].apply(lambda x: format_compact_brl(float(x)))
-            fig_rank = px.bar(
-                rank_pd,
-                x="valor_total",
-                y="instituicao",
-                orientation="h",
-                title="Top 5 instituições por volume de poupança",
-                text="valor_label",
-            )
-            fig_rank.update_traces(
-                texttemplate="%{text}",
-                textposition="outside",
-                hovertemplate="%{customdata}<extra></extra>",
-                customdata=rank_pd["valor_total"].apply(lambda x: format_brl_full(float(x))).to_list(),
-                cliponaxis=False,
-            )
-            fig_rank.update_layout(
-                yaxis=dict(categoryorder="total ascending"),
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-                xaxis_showgrid=False,
-                yaxis_showgrid=False,
-            )
-            st.plotly_chart(fig_rank, theme="streamlit", use_container_width=True)
-
-    with col_trend:
-        if df_tendencia.is_empty():
-            st.info("Sem dados históricos para tendência.")
-        else:
-            tendencia_pd = df_tendencia.to_pandas()
-            fig_trend = px.line(
-                tendencia_pd,
-                x="data_ref",
-                y="valor_total",
-                markers=True,
-                title="Evolução temporal da poupança total",
-            )
-            fig_trend.update_traces(
-                hovertemplate="%{customdata}<extra></extra>",
-                customdata=tendencia_pd["valor_total"].apply(lambda x: format_brl_full(float(x))).to_list(),
-            )
-            fig_trend.update_layout(
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-            )
-            st.plotly_chart(fig_trend, theme="streamlit", use_container_width=True)
+    if df_tendencia.is_empty():
+        st.info("Sem dados históricos para tendência.")
+    else:
+        tendencia_pd = df_tendencia.to_pandas()
+        tendencia_pd["MesCurto"] = tendencia_pd["data_ref"].apply(format_data_ref_curta)
+        tendencia_pd["MesExtenso"] = tendencia_pd["data_ref"].apply(format_data_ref_extenso)
+        tendencia_pd["TotalBRL"] = tendencia_pd["valor_total"].apply(lambda x: format_brl_full(float(x)))
+        fig_trend = px.line(
+            tendencia_pd,
+            x="MesCurto",
+            y="valor_total",
+            markers=True,
+            title="Evolução temporal da poupança total",
+            labels={"MesCurto": "Mês", "valor_total": "Total"},
+        )
+        fig_trend.update_traces(
+            hovertemplate="%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
+            customdata=tendencia_pd[["MesExtenso", "TotalBRL"]].values,
+        )
+        fig_trend.update_layout(
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(nticks=6),
+        )
+        st.plotly_chart(fig_trend, theme="streamlit", use_container_width=True)
 
     st.caption(
         "Fonte: Estatística Bancária por Município (ESTBAN) - Banco Central do Brasil. "
