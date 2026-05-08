@@ -328,9 +328,7 @@ def processar_kpis_financeiros(
         .agg(pl.col("Saldo_em_Reais").sum().alias("Total"))
         .sort("Total", descending=True)
     )
-    instituicao_top_1 = (
-        str(distribuicao_bancos.select("Instituicao").item()) if not distribuicao_bancos.is_empty() else "Sem dados"
-    )
+    instituicao_top_1 = str(distribuicao_bancos.row(0)[0]) if not distribuicao_bancos.is_empty() else "Sem dados"
 
     ord_atual = ano_atual * 12 + mes_atual
     evolucao_12_meses = (
