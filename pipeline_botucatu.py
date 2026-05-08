@@ -4,6 +4,7 @@ import shutil
 import time
 import urllib.request
 import unicodedata
+from datetime import date
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -14,8 +15,10 @@ import requests
 
 BASE_DIR = Path(__file__).resolve().parent
 WORK_DIR = BASE_DIR / "tmp_pipeline_botucatu"
-MONTHS = ["01", "02", "03"]
-YEAR = "2026"
+START_YEAR = 2024
+START_MONTH = 1
+CURRENT_DATE = date.today()
+YEAR = str(CURRENT_DATE.year)
 FINANCIAL_YEARS = ["2025", "2026"]
 BOTUCATU_MUNICIPIO_CAGED = 350750
 BOTUCATU_ID_ENTE_SICONFI = 3507506
@@ -85,6 +88,18 @@ def normalize_subclasse_code(value: object) -> str:
     return digits.zfill(7) if digits else ""
 
 
+def build_caged_periods(start_year: int, start_month: int) -> List[Tuple[int, int]]:
+    periods: List[Tuple[int, int]] = []
+    y, m = start_year, start_month
+    while (y < CURRENT_DATE.year) or (y == CURRENT_DATE.year and m <= CURRENT_DATE.month):
+        periods.append((y, m))
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+    return periods
+
+
 def download_file(url: str, output_path: Path) -> None:
     def _do_download():
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -127,12 +142,17 @@ def resolve_caged_columns(raw_file: Path, delimiter: str) -> Tuple[Dict[str, str
     }, [col_municipio, col_secao, col_subclasse, col_saldo]
 
 
-def process_caged_month(month: str) -> pd.DataFrame:
-    month_url = f"ftp://ftp.mtps.gov.br/pdet/microdados/NOVO%20CAGED/{YEAR}/{YEAR}{month}/CAGEDMOV{YEAR}{month}.7z"
-    archive_path = WORK_DIR / f"CAGEDMOV{YEAR}{month}.7z"
-    extract_dir = WORK_DIR / f"extract_{month}"
+def process_caged_month(year: int, month: int) -> pd.DataFrame:
+    month_txt = f"{month:02d}"
+    year_txt = str(year)
+    month_url = (
+        f"ftp://ftp.mtps.gov.br/pdet/microdados/NOVO%20CAGED/{year_txt}/{year_txt}{month_txt}/"
+        f"CAGEDMOV{year_txt}{month_txt}.7z"
+    )
+    archive_path = WORK_DIR / f"CAGEDMOV{year_txt}{month_txt}.7z"
+    extract_dir = WORK_DIR / f"extract_{year_txt}_{month_txt}"
 
-    log(f"Iniciando CAGED mês {month}: download do FTP.")
+    log(f"Iniciando CAGED mês {year_txt}-{month_txt}: download do FTP.")
     download_file(month_url, archive_path)
     log(f"Download concluído: {archive_path.name}")
 
@@ -163,9 +183,10 @@ def process_caged_month(month: str) -> pd.DataFrame:
         filtered = chunk[chunk[col_map["municipio"]] == BOTUCATU_MUNICIPIO_CAGED].copy()
         if filtered.empty:
             if idx % 10 == 0:
-                log(f"Mês {month}: chunk {idx} processado (sem linhas de Botucatu).")
+                    log(f"Mês {year_txt}-{month_txt}: chunk {idx} processado (sem linhas de Botucatu).")
             continue
 
+        filtered["ano_referencia"] = int(year)
         filtered["mes_referencia"] = int(month)
         filtered["saldomovimentacao"] = pd.to_numeric(filtered[col_map["saldo"]], errors="coerce").fillna(0).astype(int)
         filtered["admissao"] = (filtered["saldomovimentacao"] == 1).astype(int)
@@ -173,6 +194,7 @@ def process_caged_month(month: str) -> pd.DataFrame:
 
         month_df = pd.DataFrame(
             {
+                "ano_referencia": filtered["ano_referencia"],
                 "mes_referencia": filtered["mes_referencia"],
                 "secao": filtered[col_map["secao"]].astype(str).str.strip(),
                 "subclasse": filtered[col_map["subclasse"]].astype(str).str.strip(),
@@ -184,7 +206,7 @@ def process_caged_month(month: str) -> pd.DataFrame:
         frames.append(month_df)
 
         if idx % 10 == 0:
-            log(f"Mês {month}: chunk {idx} processado, linhas acumuladas: {sum(len(f) for f in frames)}")
+            log(f"Mês {year_txt}-{month_txt}: chunk {idx} processado, linhas acumuladas: {sum(len(f) for f in frames)}")
 
     # Limpeza obrigatória do disco após cada mês
     try:
@@ -195,11 +217,11 @@ def process_caged_month(month: str) -> pd.DataFrame:
         if extract_dir.exists():
             shutil.rmtree(extract_dir, ignore_errors=True)
     except Exception as cleanup_exc:
-        log(f"Aviso de limpeza mês {month}: {cleanup_exc}")
+        log(f"Aviso de limpeza mês {year_txt}-{month_txt}: {cleanup_exc}")
 
     if not frames:
         return pd.DataFrame(
-            columns=["mes_referencia", "secao", "subclasse", "saldomovimentacao", "admissao", "demissao"]
+            columns=["ano_referencia", "mes_referencia", "secao", "subclasse", "saldomovimentacao", "admissao", "demissao"]
         )
 
     month_all = pd.concat(frames, ignore_index=True)
@@ -208,14 +230,16 @@ def process_caged_month(month: str) -> pd.DataFrame:
 
 def run_caged_etl() -> pd.DataFrame:
     log("ETL CAGED iniciado.")
+    periods = build_caged_periods(START_YEAR, START_MONTH)
+    log(f"CAGED será processado de {START_YEAR}-{START_MONTH:02d} até {CURRENT_DATE.year}-{CURRENT_DATE.month:02d}.")
     monthly_results = []
-    for m in MONTHS:
+    for year, month in periods:
         try:
-            month_df = process_caged_month(m)
-            log(f"CAGED mês {m} finalizado. Linhas de Botucatu: {len(month_df)}")
+            month_df = process_caged_month(year, month)
+            log(f"CAGED mês {year}-{month:02d} finalizado. Linhas de Botucatu: {len(month_df)}")
             monthly_results.append(month_df)
         except Exception as exc:
-            log(f"Erro ao processar mês {m}: {exc}")
+            log(f"Erro ao processar mês {year}-{month:02d}: {exc}")
 
     if not monthly_results:
         raise RuntimeError("Nenhum mês CAGED foi processado com sucesso.")
@@ -226,11 +250,11 @@ def run_caged_etl() -> pd.DataFrame:
         return caged
 
     caged = (
-        caged.groupby(["mes_referencia", "secao", "subclasse"], as_index=False)[
+        caged.groupby(["ano_referencia", "mes_referencia", "secao", "subclasse"], as_index=False)[
             ["saldomovimentacao", "admissao", "demissao"]
         ]
         .sum()
-        .sort_values(["mes_referencia", "secao", "subclasse"])
+        .sort_values(["ano_referencia", "mes_referencia", "secao", "subclasse"])
     )
     caged["subclasse"] = caged["subclasse"].map(normalize_subclasse_code)
     caged["estoque_anual_2026"] = caged.groupby(["secao", "subclasse"])["saldomovimentacao"].transform("sum")

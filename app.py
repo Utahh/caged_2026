@@ -340,6 +340,9 @@ def normalize_caged(df: pl.DataFrame) -> pl.DataFrame:
     )
     return df.with_columns(
         [
+            (pl.col("ano_referencia").cast(pl.Int64) if "ano_referencia" in df.columns else pl.lit(2026)).alias(
+                "ano_referencia"
+            ),
             pl.col("mes_referencia").cast(pl.Int64),
             pl.col("admissao").cast(pl.Float64).fill_null(0.0),
             pl.col("demissao").cast(pl.Float64).fill_null(0.0),
@@ -426,7 +429,7 @@ with menu_r:
     st.empty()
 
 if not caged.is_empty():
-    c = caged.filter(pl.col("mes_referencia").is_in([1, 2, 3]))
+    c = caged.filter((pl.col("ano_referencia") == 2026) & pl.col("mes_referencia").is_in([1, 2, 3]))
     if grupo != "Todos":
         c = c.filter(pl.col("Grande Grupo") == grupo)
 
