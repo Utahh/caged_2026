@@ -291,6 +291,10 @@ def format_brl_full(v: float) -> str:
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
+def csv_bytes_from_pandas(df) -> bytes:
+    return df.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
+
+
 def processar_kpis_financeiros(
     df_fin: pl.DataFrame, mes_atual: int, ano_atual: int, instituicao_filtro: str = "Todas"
 ) -> tuple[dict, pl.DataFrame, pl.DataFrame]:
@@ -680,22 +684,28 @@ if not caged.is_empty():
         go.Scatter(
             x=monthly_pd["Mês Curto"],
             y=monthly_pd["Admissões"],
-            mode="lines+markers",
+            mode="lines+markers+text",
             name="Admissões",
             line=dict(color="#2563eb", width=3),
             customdata=monthly_pd[["Mês", "Admissões_BR"]].values,
             hovertemplate="%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
+            text=monthly_pd["Admissões_BR"],
+            textposition="top center",
+            textfont=dict(size=10),
         )
     )
     fig_line.add_trace(
         go.Scatter(
             x=monthly_pd["Mês Curto"],
             y=monthly_pd["Desligamentos"],
-            mode="lines+markers",
+            mode="lines+markers+text",
             name="Desligamentos",
             line=dict(color="#1e3a8a", width=3),
             customdata=monthly_pd[["Mês", "Desligamentos_BR"]].values,
             hovertemplate="%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
+            text=monthly_pd["Desligamentos_BR"],
+            textposition="bottom center",
+            textfont=dict(size=10),
         )
     )
     fig_line.update_layout(
@@ -704,16 +714,39 @@ if not caged.is_empty():
         title="Admissões x Desligamentos",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
         xaxis=dict(nticks=6),
+        margin=dict(l=16, r=40, t=56, b=32),
+        yaxis=dict(automargin=True),
     )
     st.plotly_chart(fig_line, theme="streamlit", use_container_width=True)
+    st.download_button(
+        "Exportar CSV - Admissões x Desligamentos",
+        data=csv_bytes_from_pandas(monthly_pd[["Mês", "Admissões", "Desligamentos"]]),
+        file_name="caged_admissoes_desligamentos.csv",
+        mime="text/csv",
+        key="dl_caged_line",
+    )
 
-    fig_bar = px.bar(monthly_pd, x="Mês Curto", y="Saldo", title="Evolução do Saldo Mensal")
+    fig_bar = px.bar(monthly_pd, x="Mês Curto", y="Saldo", title="Evolução do Saldo Mensal", text="Saldo_BR")
     fig_bar.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
     fig_bar.update_traces(
         customdata=monthly_pd[["Mês", "Saldo_BR"]].values,
         hovertemplate="%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
+        textposition="outside",
+        cliponaxis=False,
+    )
+    fig_bar.update_layout(
+        margin=dict(l=16, r=40, t=56, b=32),
+        xaxis=dict(automargin=True),
+        yaxis=dict(automargin=True),
     )
     st.plotly_chart(fig_bar, theme="streamlit", use_container_width=True)
+    st.download_button(
+        "Exportar CSV - Evolução do Saldo",
+        data=csv_bytes_from_pandas(monthly_pd[["Mês", "Saldo"]]),
+        file_name="caged_evolucao_saldo.csv",
+        mime="text/csv",
+        key="dl_caged_bar",
+    )
 
     if not caged_comp.is_empty():
         st.markdown("## Comparativo de Saldo CAGED entre Municípios")
@@ -732,6 +765,7 @@ if not caged.is_empty():
         )
         comp_pd = comp_12m.to_pandas()
         if not comp_pd.empty:
+            comp_pd["Saldo_BR"] = comp_pd["Saldo"].apply(lambda v: br_int(float(v)))
             fig_comp = px.line(
                 comp_pd,
                 x="Mês",
@@ -740,9 +774,28 @@ if not caged.is_empty():
                 markers=True,
                 title="Evolução de Saldo por Município (12 meses)",
             )
-            fig_comp.update_traces(hovertemplate="%{x}<br>%{y:,.0f}<extra>%{fullData.name}</extra>")
-            fig_comp.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", xaxis=dict(nticks=6))
+            fig_comp.update_traces(
+                hovertemplate="%{x}<br>%{customdata}<extra>%{fullData.name}</extra>",
+                customdata=comp_pd["Saldo_BR"],
+                text=comp_pd["Saldo_BR"],
+                textposition="top center",
+                textfont=dict(size=9),
+            )
+            fig_comp.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(nticks=6, automargin=True),
+                yaxis=dict(automargin=True),
+                margin=dict(l=16, r=40, t=56, b=32),
+            )
             st.plotly_chart(fig_comp, theme="streamlit", use_container_width=True)
+            st.download_button(
+                "Exportar CSV - Comparativo Municípios",
+                data=csv_bytes_from_pandas(comp_pd[["ano_referencia", "mes_referencia", "Municipio", "Saldo"]]),
+                file_name="caged_comparativo_municipios.csv",
+                mime="text/csv",
+                key="dl_caged_comp",
+            )
         else:
             st.info("Sem dados suficientes para o comparativo de municípios no período selecionado.")
 
@@ -799,8 +852,18 @@ if not caged.is_empty():
         yaxis=dict(categoryorder="total ascending"),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=16, r=52, t=56, b=24),
+        xaxis=dict(automargin=True),
+        yaxis_automargin=True,
     )
     st.plotly_chart(fig_hbar, theme="streamlit", use_container_width=True)
+    st.download_button(
+        "Exportar CSV - Saldo por Atividade",
+        data=csv_bytes_from_pandas(saldo_atividade_pd),
+        file_name="caged_saldo_por_atividade.csv",
+        mime="text/csv",
+        key="dl_caged_hbar",
+    )
 
     st.markdown(f"## Top 5 Subclasses ({MESES[month]}/{ano})")
     a1, a2 = st.columns(2)
@@ -875,14 +938,25 @@ try:
                     line=dict(color="#1e3a8a", width=3),
                     hovertemplate="%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
                     customdata=evo_pd[["Mês Extenso", "Total BRL"]].values,
+                    text=evo_pd["Total BRL"],
+                    textposition="top center",
+                    textfont=dict(size=9),
                 )
                 fig_evo.update_layout(
                     plot_bgcolor="rgba(0,0,0,0)",
                     paper_bgcolor="rgba(0,0,0,0)",
                     xaxis=dict(showgrid=False, nticks=6),
                     yaxis=dict(showgrid=False),
+                    margin=dict(l=16, r=52, t=56, b=32),
                 )
                 st.plotly_chart(fig_evo, theme="streamlit", use_container_width=True)
+                st.download_button(
+                    "Exportar CSV - Evolução Financeira",
+                    data=csv_bytes_from_pandas(evo_pd[["Ano", "Mes", "Total"]]),
+                    file_name="financeiro_evolucao_12_meses.csv",
+                    mime="text/csv",
+                    key="dl_fin_evo",
+                )
 
         with c2:
             if distribuicao_bancos.is_empty():
@@ -904,6 +978,7 @@ try:
                     textposition="outside",
                     hovertemplate="%{y}<br>%{customdata}<extra></extra>",
                     customdata=dist_pd["Total BRL"],
+                    cliponaxis=False,
                 )
                 fig_dist.update_layout(
                     yaxis=dict(categoryorder="total ascending", showgrid=False),
@@ -934,6 +1009,13 @@ try:
                     instituicoes_disponiveis,
                     key="instituicao_filtro",
                     help="Toque na barra ou selecione manualmente.",
+                )
+                st.download_button(
+                    "Exportar CSV - Saldo por Instituição",
+                    data=csv_bytes_from_pandas(dist_pd[["Instituicao", "Total"]]),
+                    file_name="financeiro_saldo_por_instituicao.csv",
+                    mime="text/csv",
+                    key="dl_fin_dist",
                 )
 
         st.caption(
