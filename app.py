@@ -1,6 +1,7 @@
 from pathlib import Path
 import base64
 import io
+from datetime import date, timedelta
 
 import fitz
 import plotly.express as px
@@ -60,7 +61,20 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-MESES = {1: "Janeiro", 2: "Fevereiro", 3: "Março"}
+MESES = {
+    1: "Janeiro",
+    2: "Fevereiro",
+    3: "Março",
+    4: "Abril",
+    5: "Maio",
+    6: "Junho",
+    7: "Julho",
+    8: "Agosto",
+    9: "Setembro",
+    10: "Outubro",
+    11: "Novembro",
+    12: "Dezembro",
+}
 POUPANCA_CODIGOS = ["111310100", "111310200"]
 
 
@@ -235,6 +249,10 @@ def format_data_ref_extenso(data_ref: str) -> str:
         return data_ref
 
 
+def format_brl_full(v: float) -> str:
+    return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
 def processar_dados_estban(df_estban: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     if df_estban.is_empty():
         vazio_kpi = pl.DataFrame({"valor_atual": [0.0], "delta_perc": [0.0], "data_ref": ["Sem dados"]})
@@ -251,10 +269,15 @@ def processar_dados_estban(df_estban: pl.DataFrame) -> tuple[pl.DataFrame, pl.Da
         .filter(pl.col("valor_poupanca").is_not_null())
     )
 
+    # Considera defasagem operacional de 60 dias do ESTBAN.
+    cutoff = (date.today() - timedelta(days=60)).strftime("%Y-%m")
+    base = base.filter(pl.col("data_ref") <= cutoff)
+
     df_tendencia = (
         base.group_by("data_ref")
         .agg(pl.col("valor_poupanca").sum().alias("valor_total"))
         .sort("data_ref")
+        .tail(12)
     )
 
     if df_tendencia.height == 0:
@@ -418,7 +441,13 @@ st.title("📊 Dashboard Executivo Março 2026")
 menu_l, menu_r = st.columns([9, 1])
 with menu_l:
     with st.popover("☰ Filtros"):
-        month = st.selectbox("Mês", [1, 2, 3], format_func=lambda m: MESES[m], index=2)
+        anos_disponiveis = (
+            sorted(caged.select(pl.col("ano_referencia").unique()).to_series().drop_nulls().to_list())
+            if not caged.is_empty() and "ano_referencia" in caged.columns
+            else [2026]
+        )
+        ano = st.selectbox("Ano", anos_disponiveis, index=len(anos_disponiveis) - 1)
+        month = st.selectbox("Mês", list(range(1, 13)), format_func=lambda m: MESES[m], index=2)
         grupos = (
             ["Todos"] + sorted(caged.select(pl.col("Grande Grupo").unique()).to_series().drop_nulls().to_list())
             if not caged.is_empty()
@@ -429,12 +458,15 @@ with menu_r:
     st.empty()
 
 if not caged.is_empty():
-    c = caged.filter((pl.col("ano_referencia") == 2026) & pl.col("mes_referencia").is_in([1, 2, 3]))
+    c = caged.filter(pl.col("ano_referencia") == ano)
     if grupo != "Todos":
         c = c.filter(pl.col("Grande Grupo") == grupo)
 
     c_month = c.filter(pl.col("mes_referencia") == month)
-    c_prev = c.filter(pl.col("mes_referencia") == max(1, month - 1))
+    prev_year, prev_month = (ano, month - 1) if month > 1 else (ano - 1, 12)
+    c_prev = caged.filter((pl.col("ano_referencia") == prev_year) & (pl.col("mes_referencia") == prev_month))
+    if grupo != "Todos":
+        c_prev = c_prev.filter(pl.col("Grande Grupo") == grupo)
 
     adm = float(c_month.select(pl.col("admissao").sum()).item())
     des = float(c_month.select(pl.col("demissao").sum()).item())
@@ -451,8 +483,14 @@ if not caged.is_empty():
     k3.metric("Saldo", br_int(saldo), f"{mom(saldo, saldo_prev):+.1f}%")
     k4.metric("Estoque", br_int(estoque))
 
+    c_12m = caged.with_columns((pl.col("ano_referencia") * 12 + pl.col("mes_referencia")).alias("ord_mes"))
+    ord_atual = ano * 12 + month
+    c_12m = c_12m.filter((pl.col("ord_mes") >= ord_atual - 11) & (pl.col("ord_mes") <= ord_atual))
+    if grupo != "Todos":
+        c_12m = c_12m.filter(pl.col("Grande Grupo") == grupo)
+
     monthly = (
-        c.group_by("mes_referencia")
+        c_12m.group_by(["ano_referencia", "mes_referencia"])
         .agg(
             [
                 pl.col("admissao").sum().alias("Admissões"),
@@ -460,8 +498,16 @@ if not caged.is_empty():
                 (pl.col("admissao").sum() - pl.col("demissao").sum()).alias("Saldo"),
             ]
         )
-        .sort("mes_referencia")
-        .with_columns(pl.col("mes_referencia").replace_strict(MESES).alias("Mês"))
+        .sort(["ano_referencia", "mes_referencia"])
+        .with_columns(
+            pl.concat_str(
+                [
+                    pl.col("mes_referencia").replace_strict(MESES),
+                    pl.lit("/"),
+                    pl.col("ano_referencia").cast(pl.String),
+                ]
+            ).alias("Mês")
+        )
     )
     monthly_pd = monthly.to_pandas()
 
@@ -496,7 +542,7 @@ if not caged.is_empty():
     st.plotly_chart(fig_bar, theme="streamlit", use_container_width=True)
 
     rank_subclasse = (
-        c.filter(pl.col("mes_referencia") == 3)
+        c.filter(pl.col("mes_referencia") == month)
         .group_by("CNAE 2.0 Subclasse")
         .agg(
             [
@@ -520,7 +566,7 @@ if not caged.is_empty():
     top_menores = rank_subclasse.tail(5).sort("Saldo")
 
     saldo_atividade = (
-        c.filter(pl.col("mes_referencia") == 3)
+        c.filter(pl.col("mes_referencia") == month)
         .group_by("Atividade Econômica")
         .agg((pl.col("admissao").sum() - pl.col("demissao").sum()).alias("Saldo"))
         .select(["Atividade Econômica", "Saldo"])
@@ -551,7 +597,7 @@ if not caged.is_empty():
     )
     st.plotly_chart(fig_hbar, theme="streamlit", use_container_width=True)
 
-    st.markdown("## Top 5 Subclasses (Março)")
+    st.markdown(f"## Top 5 Subclasses ({MESES[month]}/{ano})")
     a1, a2 = st.columns(2)
     with a1:
         st.markdown("### Maiores Saldos")
@@ -625,7 +671,8 @@ else:
             fig_rank.update_traces(
                 texttemplate="%{text}",
                 textposition="outside",
-                hovertemplate="%{x:,.0f}<extra></extra>",
+                hovertemplate="%{customdata}<extra></extra>",
+                customdata=rank_pd["valor_total"].apply(lambda x: format_brl_full(float(x))).to_list(),
                 cliponaxis=False,
             )
             fig_rank.update_layout(
@@ -649,7 +696,10 @@ else:
                 markers=True,
                 title="Evolução temporal da poupança total",
             )
-            fig_trend.update_traces(hovertemplate="%{y:,.0f}<extra></extra>")
+            fig_trend.update_traces(
+                hovertemplate="%{customdata}<extra></extra>",
+                customdata=tendencia_pd["valor_total"].apply(lambda x: format_brl_full(float(x))).to_list(),
+            )
             fig_trend.update_layout(
                 plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)",
