@@ -276,6 +276,93 @@ def format_brl_full(v: float) -> str:
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
+def processar_kpis_financeiros(
+    df_fin: pl.DataFrame, mes_atual: int, ano_atual: int
+) -> tuple[dict, pl.DataFrame, pl.DataFrame]:
+    if df_fin.is_empty():
+        vazio = {
+            "total_dinheiro": 0.0,
+            "total_poupanca": 0.0,
+            "instituicao_top_1": "Sem dados",
+            "saldo_ano_anterior": None,
+            "variacao_yoy": None,
+            "mes_atual": mes_atual,
+            "ano_atual": ano_atual,
+        }
+        return vazio, pl.DataFrame(), pl.DataFrame()
+
+    base = df_fin.with_columns(
+        [
+            pl.col("Ano").cast(pl.Int64),
+            pl.col("Mes").cast(pl.Int64),
+            pl.col("Instituição Financeira").cast(pl.String).alias("Instituicao"),
+            pl.col("Saldo").cast(pl.Float64).fill_null(0.0).alias("Saldo_em_Reais"),
+            pl.when(pl.col("Codigo_Contabil").is_in(POUPANCA_CODIGOS))
+            .then(pl.lit("Poupança"))
+            .when(pl.col("Instituição Financeira").str.contains("Fundos", literal=True))
+            .then(pl.lit("Fundo de Investimento"))
+            .otherwise(pl.lit("Conta Corrente"))
+            .alias("Tipo_Conta"),
+        ]
+    )
+
+    tot_mes = (
+        base.group_by(["Ano", "Mes"])
+        .agg(pl.col("Saldo_em_Reais").sum().alias("Saldo_Total"))
+        .sort(["Ano", "Mes"])
+    )
+    tot_mes_valid = tot_mes.filter(pl.col("Saldo_Total") > 0)
+    if not tot_mes_valid.is_empty():
+        ultimo = tot_mes_valid.tail(1)
+        ano_atual = int(ultimo.select("Ano").item())
+        mes_atual = int(ultimo.select("Mes").item())
+
+    atual = base.filter((pl.col("Ano") == ano_atual) & (pl.col("Mes") == mes_atual))
+    total_dinheiro = float(atual.select(pl.col("Saldo_em_Reais").sum()).item() or 0.0)
+    total_poupanca = float(
+        atual.filter(pl.col("Tipo_Conta") == "Poupança").select(pl.col("Saldo_em_Reais").sum()).item() or 0.0
+    )
+
+    distribuicao_bancos = (
+        atual.group_by("Instituicao")
+        .agg(pl.col("Saldo_em_Reais").sum().alias("Total"))
+        .sort("Total", descending=True)
+    )
+    instituicao_top_1 = (
+        str(distribuicao_bancos.select("Instituicao").item()) if not distribuicao_bancos.is_empty() else "Sem dados"
+    )
+
+    ord_atual = ano_atual * 12 + mes_atual
+    evolucao_12_meses = (
+        base.with_columns((pl.col("Ano") * 12 + pl.col("Mes")).alias("ord_mes"))
+        .filter((pl.col("ord_mes") >= ord_atual - 11) & (pl.col("ord_mes") <= ord_atual))
+        .group_by(["Ano", "Mes"])
+        .agg(pl.col("Saldo_em_Reais").sum().alias("Total"))
+        .sort(["Ano", "Mes"])
+    )
+
+    saldo_ano_anterior = (
+        base.filter((pl.col("Ano") == ano_atual - 1) & (pl.col("Mes") == mes_atual))
+        .select(pl.col("Saldo_em_Reais").sum())
+        .item()
+    )
+    saldo_ano_anterior = float(saldo_ano_anterior) if saldo_ano_anterior is not None else None
+    variacao_yoy = None
+    if saldo_ano_anterior is not None and saldo_ano_anterior != 0:
+        variacao_yoy = mom(total_dinheiro, float(saldo_ano_anterior))
+
+    kpis = {
+        "total_dinheiro": total_dinheiro,
+        "total_poupanca": total_poupanca,
+        "instituicao_top_1": instituicao_top_1,
+        "saldo_ano_anterior": saldo_ano_anterior,
+        "variacao_yoy": variacao_yoy,
+        "mes_atual": mes_atual,
+        "ano_atual": ano_atual,
+    }
+    return kpis, evolucao_12_meses, distribuicao_bancos
+
+
 def processar_dados_estban(df_estban: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     if df_estban.is_empty():
         vazio_kpi = pl.DataFrame({"valor_atual": [0.0], "delta_perc": [0.0], "data_ref": ["Sem dados"]})
@@ -481,6 +568,7 @@ with menu_r:
     st.empty()
 
 if not caged.is_empty():
+    st.markdown("## Emprego (CAGED)")
     c = caged.filter(pl.col("ano_referencia") == ano)
     if grupo != "Todos":
         c = c.filter(pl.col("Grande Grupo") == grupo)
@@ -658,99 +746,92 @@ if not caged.is_empty():
         )
 
 st.divider()
-st.header("Análise de Poupança Privada (ESTBAN)")
+st.header("📊 Visão Financeira e Liquidez (Caixa e Aplicações)")
 
-if fin.is_empty():
-    st.warning("Base financeira indisponível para análise de poupança.")
-else:
-    df_estban = (
-        fin.filter(pl.col("Codigo_Contabil").is_in(POUPANCA_CODIGOS))
-        .with_columns(
-            [
-                pl.col("Instituição Financeira").alias("instituicao"),
-                pl.col("Saldo").alias("valor_poupanca"),
-                pl.concat_str(
-                    [
-                        pl.col("Ano").cast(pl.String),
-                        pl.lit("-"),
-                        pl.col("Mes").cast(pl.String).str.zfill(2),
-                    ]
-                ).alias("data_ref"),
-            ]
-        )
-        .select(["instituicao", "valor_poupanca", "data_ref"])
-    )
-
-    df_kpi_atual, df_bancos_ranking, df_tendencia = processar_dados_estban(df_estban)
-    valor_atual = float(df_kpi_atual.select("valor_atual").item() or 0.0)
-    delta_perc = float(df_kpi_atual.select("delta_perc").item() or 0.0)
-    data_ref = str(df_kpi_atual.select("data_ref").item())
-
-    st.metric(
-        "Volume Total de Poupança",
-        format_brl_full(valor_atual),
-        format_pct(delta_perc),
-    )
-    st.caption(f"Dados de referência: {format_data_ref_extenso(data_ref)}")
-
-    if df_bancos_ranking.is_empty():
-        st.info("Sem dados de ranking de instituições.")
+try:
+    if fin.is_empty():
+        st.warning("Base financeira indisponível para análise de liquidez.")
     else:
-        rank_pd = df_bancos_ranking.head(5).to_pandas()
-        rank_pd["valor_label"] = rank_pd["valor_total"].apply(lambda x: format_compact_brl(float(x)))
-        fig_rank = px.bar(
-            rank_pd,
-            x="valor_total",
-            y="instituicao",
-            orientation="h",
-            title="Top 5 instituições por volume de poupança",
-            text="valor_label",
-            labels={"valor_total": "Total", "instituicao": "Instituição"},
-        )
-        fig_rank.update_traces(
-            texttemplate="%{text}",
-            textposition="outside",
-            hovertemplate="%{customdata}<extra></extra>",
-            customdata=rank_pd["valor_total"].apply(lambda x: format_brl_full(float(x))).to_list(),
-            cliponaxis=False,
-        )
-        fig_rank.update_layout(
-            yaxis=dict(categoryorder="total ascending"),
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            xaxis_showgrid=False,
-            yaxis_showgrid=False,
-            margin=dict(r=80),
-        )
-        st.plotly_chart(fig_rank, theme="streamlit", use_container_width=True)
+        kpis_fin, evolucao_12_meses, distribuicao_bancos = processar_kpis_financeiros(fin, month, ano)
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Total em Caixa/Aplicações", format_mi(kpis_fin["total_dinheiro"]))
+        k2.metric("Total em Poupança", format_brl_full(kpis_fin["total_poupanca"]))
+        k3.metric("Maior Concentração", kpis_fin["instituicao_top_1"])
+        if kpis_fin["variacao_yoy"] is None:
+            k4.metric("Comparativo Anual (YoY)", "Sem base", "N/D")
+        else:
+            k4.metric("Comparativo Anual (YoY)", format_brl_full(kpis_fin["total_dinheiro"]), format_pct(kpis_fin["variacao_yoy"]))
 
-    if df_tendencia.is_empty():
-        st.info("Sem dados históricos para tendência.")
-    else:
-        tendencia_pd = df_tendencia.to_pandas()
-        tendencia_pd["MesCurto"] = tendencia_pd["data_ref"].apply(format_data_ref_curta)
-        tendencia_pd["MesExtenso"] = tendencia_pd["data_ref"].apply(format_data_ref_extenso)
-        tendencia_pd["TotalBRL"] = tendencia_pd["valor_total"].apply(lambda x: format_brl_full(float(x)))
-        fig_trend = px.line(
-            tendencia_pd,
-            x="MesCurto",
-            y="valor_total",
-            markers=True,
-            title="Evolução temporal da poupança total",
-            labels={"MesCurto": "Mês", "valor_total": "Total"},
+        st.caption(
+            f"Dados de referência: {MESES.get(kpis_fin['mes_atual'], str(kpis_fin['mes_atual']))} de {kpis_fin['ano_atual']}"
         )
-        fig_trend.update_traces(
-            hovertemplate="%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
-            customdata=tendencia_pd[["MesExtenso", "TotalBRL"]].values,
-        )
-        fig_trend.update_layout(
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            xaxis=dict(nticks=6),
-        )
-        st.plotly_chart(fig_trend, theme="streamlit", use_container_width=True)
 
-    st.caption(
-        "Fonte: Estatística Bancária por Município (ESTBAN) - Banco Central do Brasil. "
-        "Os dados podem apresentar uma defasagem de até 60 dias em relação ao mês corrente."
-    )
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            if evolucao_12_meses.is_empty():
+                st.info("Sem dados para evolução financeira.")
+            else:
+                evo_pd = evolucao_12_meses.to_pandas()
+                evo_pd["Mês"] = evo_pd.apply(
+                    lambda r: format_data_ref_curta(f"{int(r['Ano'])}-{int(r['Mes']):02d}"),
+                    axis=1,
+                )
+                evo_pd["Mês Extenso"] = evo_pd.apply(
+                    lambda r: format_data_ref_extenso(f"{int(r['Ano'])}-{int(r['Mes']):02d}"),
+                    axis=1,
+                )
+                evo_pd["Total BRL"] = evo_pd["Total"].apply(lambda x: format_brl_full(float(x)))
+                fig_evo = px.line(
+                    evo_pd,
+                    x="Mês",
+                    y="Total",
+                    markers=True,
+                    title="Evolução do Saldo (Últimos 12 Meses)",
+                    labels={"Mês": "Mês", "Total": "Total"},
+                )
+                fig_evo.update_traces(
+                    line=dict(color="#1e3a8a", width=3),
+                    hovertemplate="%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
+                    customdata=evo_pd[["Mês Extenso", "Total BRL"]].values,
+                )
+                fig_evo.update_layout(
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(showgrid=False, nticks=6),
+                    yaxis=dict(showgrid=False, tickformat="~s", tickprefix="R$ "),
+                )
+                st.plotly_chart(fig_evo, theme="streamlit", use_container_width=True)
+
+        with c2:
+            if distribuicao_bancos.is_empty():
+                st.info("Sem dados para distribuição por instituição.")
+            else:
+                dist_pd = distribuicao_bancos.to_pandas()
+                dist_pd["Total BRL"] = dist_pd["Total"].apply(lambda x: format_brl_full(float(x)))
+                fig_dist = px.bar(
+                    dist_pd,
+                    x="Total",
+                    y="Instituicao",
+                    orientation="h",
+                    title="Saldo por Instituição",
+                    text_auto=".2s",
+                    labels={"Total": "Total", "Instituicao": "Instituição"},
+                )
+                fig_dist.update_traces(
+                    hovertemplate="%{y}<br>%{customdata}<extra></extra>",
+                    customdata=dist_pd["Total BRL"],
+                )
+                fig_dist.update_layout(
+                    yaxis=dict(categoryorder="total ascending", showgrid=False),
+                    xaxis=dict(visible=False, showgrid=False),
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(fig_dist, theme="streamlit", use_container_width=True)
+
+        st.caption(
+            "Fonte: dados financeiros municipais (Siconfi/ESTBAN-like) consolidados para Botucatu. "
+            "Os dados podem apresentar defasagem de até 60 dias em relação ao mês corrente."
+        )
+except Exception as exc:
+    st.error(f"Não foi possível renderizar a Visão Financeira e Liquidez: {exc}")
