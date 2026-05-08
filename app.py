@@ -38,9 +38,18 @@ st.markdown(
             border: 1px solid var(--border-color);
             border-radius: 12px;
             padding: 0.4rem 0.6rem 0.5rem 0.6rem;
+            min-height: 120px;
         }
         div[data-testid="stMetricLabel"] p { color: var(--muted-color) !important; }
-        div[data-testid="stMetricValue"] { color: var(--text-color) !important; }
+        div[data-testid="stMetricValue"] {
+            color: var(--text-color) !important;
+            font-size: clamp(1.35rem, 2.1vw, 2.15rem) !important;
+            line-height: 1.2 !important;
+            white-space: normal !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
+            word-break: break-word !important;
+        }
         div[data-testid="stMetricDelta"] { color: inherit !important; }
         div[data-testid="stDataFrame"] {
             background: var(--card-color);
@@ -50,10 +59,16 @@ st.markdown(
         }
         @media (max-width: 768px) {
             div[data-testid="column"] {
-                width: 48% !important;
-                flex: 1 1 48% !important;
-                display: inline-block !important;
-                min-width: 48% !important;
+                width: 100% !important;
+                flex: 1 1 100% !important;
+                display: block !important;
+                min-width: 100% !important;
+            }
+            div[data-testid="stMetric"] {
+                min-height: 104px;
+            }
+            div[data-testid="stMetricValue"] {
+                font-size: clamp(1.2rem, 6.2vw, 1.9rem) !important;
             }
         }
     </style>
@@ -424,7 +439,7 @@ def processar_dados_estban(df_estban: pl.DataFrame) -> tuple[pl.DataFrame, pl.Da
 
 
 @st.cache_data
-def load_data() -> tuple[pl.DataFrame, pl.DataFrame]:
+def load_data() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     root = Path(__file__).resolve().parent
     data_dir = root / "data"
     caged_path = path_exist(
@@ -443,9 +458,16 @@ def load_data() -> tuple[pl.DataFrame, pl.DataFrame]:
             data_dir / "financas_botucatu_2026.csv",
         ]
     )
+    comp_path = path_exist(
+        [
+            root / "caged_comparativo_municipios.csv",
+            data_dir / "caged_comparativo_municipios.csv",
+        ]
+    )
     caged = pl.read_csv(caged_path, separator=";") if caged_path else pl.DataFrame()
     fin = pl.read_csv(fin_path, separator=";") if fin_path else pl.DataFrame()
-    return caged, fin
+    comp = pl.read_csv(comp_path, separator=";") if comp_path else pl.DataFrame()
+    return caged, fin, comp
 
 
 def normalize_caged(df: pl.DataFrame) -> pl.DataFrame:
@@ -537,13 +559,25 @@ def normalize_fin(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-caged_raw, fin_raw = load_data()
-if caged_raw.is_empty() and fin_raw.is_empty():
+caged_raw, fin_raw, caged_comp_raw = load_data()
+if caged_raw.is_empty() and fin_raw.is_empty() and caged_comp_raw.is_empty():
     st.warning("⚠️ Arquivos não encontrados na raiz do projeto.")
     st.stop()
 
 caged = normalize_caged(caged_raw)
 fin = normalize_fin(fin_raw)
+caged_comp = (
+    caged_comp_raw.with_columns(
+        [
+            pl.col("ano_referencia").cast(pl.Int64),
+            pl.col("mes_referencia").cast(pl.Int64),
+            pl.col("Municipio").cast(pl.String),
+            pl.col("Saldo").cast(pl.Float64).fill_null(0.0),
+        ]
+    )
+    if not caged_comp_raw.is_empty()
+    else caged_comp_raw
+)
 
 st.title("📊 Dashboard Executivo Março 2026")
 
@@ -563,6 +597,18 @@ with menu_l:
             else ["Todos"]
         )
         grupo = st.selectbox("Atividade Econômica", grupos, index=0)
+        cidades_base = ["Botucatu", "Salto", "Jaú", "Sertãozinho", "Tatuí"]
+        cidades_disponiveis = (
+            sorted(caged_comp.select(pl.col("Municipio").unique()).to_series().drop_nulls().to_list())
+            if not caged_comp.is_empty()
+            else cidades_base
+        )
+        cidades_default = [c for c in cidades_base if c in cidades_disponiveis] or cidades_disponiveis
+        cidades_selecionadas = st.multiselect(
+            "Municípios (Comparativo Saldo CAGED)",
+            options=cidades_disponiveis,
+            default=cidades_default,
+        )
 with menu_r:
     st.empty()
 
@@ -668,6 +714,37 @@ if not caged.is_empty():
         hovertemplate="%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
     )
     st.plotly_chart(fig_bar, theme="streamlit", use_container_width=True)
+
+    if not caged_comp.is_empty():
+        st.markdown("## Comparativo de Saldo CAGED entre Municípios")
+        comp_12m = caged_comp.with_columns((pl.col("ano_referencia") * 12 + pl.col("mes_referencia")).alias("ord_mes"))
+        comp_12m = comp_12m.filter((pl.col("ord_mes") >= ord_atual - 11) & (pl.col("ord_mes") <= ord_atual))
+        if cidades_selecionadas:
+            comp_12m = comp_12m.filter(pl.col("Municipio").is_in(cidades_selecionadas))
+        comp_12m = comp_12m.with_columns(
+            pl.concat_str(
+                [
+                    pl.col("mes_referencia").replace_strict(MESES),
+                    pl.lit("/"),
+                    pl.col("ano_referencia").cast(pl.String),
+                ]
+            ).alias("Mês")
+        )
+        comp_pd = comp_12m.to_pandas()
+        if not comp_pd.empty:
+            fig_comp = px.line(
+                comp_pd,
+                x="Mês",
+                y="Saldo",
+                color="Municipio",
+                markers=True,
+                title="Evolução de Saldo por Município (12 meses)",
+            )
+            fig_comp.update_traces(hovertemplate="%{x}<br>%{y:,.0f}<extra>%{fullData.name}</extra>")
+            fig_comp.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", xaxis=dict(nticks=6))
+            st.plotly_chart(fig_comp, theme="streamlit", use_container_width=True)
+        else:
+            st.info("Sem dados suficientes para o comparativo de municípios no período selecionado.")
 
     rank_subclasse = (
         c.filter(pl.col("mes_referencia") == month)

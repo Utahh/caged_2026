@@ -22,6 +22,13 @@ YEAR = str(CURRENT_DATE.year)
 FINANCIAL_YEARS = ["2025", "2026"]
 BOTUCATU_MUNICIPIO_CAGED = 350750
 BOTUCATU_ID_ENTE_SICONFI = 3507506
+MUNICIPIOS_COMPARATIVO_CAGED = {
+    350750: "Botucatu",
+    354520: "Salto",
+    352530: "Jaú",
+    355170: "Sertãozinho",
+    355400: "Tatuí",
+}
 POUPANCA_CODIGOS = {"111310100", "111310200"}
 MAPA_BANCOS = {
     "111110100": "Caixa da Prefeitura",
@@ -142,7 +149,7 @@ def resolve_caged_columns(raw_file: Path, delimiter: str) -> Tuple[Dict[str, str
     }, [col_municipio, col_secao, col_subclasse, col_saldo]
 
 
-def process_caged_month(year: int, month: int) -> pd.DataFrame:
+def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
     month_txt = f"{month:02d}"
     year_txt = str(year)
     month_url = (
@@ -167,6 +174,7 @@ def process_caged_month(year: int, month: int) -> pd.DataFrame:
 
     col_map, usecols = resolve_caged_columns(raw_file, delimiter)
     frames = []
+    frames_comp = []
 
     for idx, chunk in enumerate(
         pd.read_csv(
@@ -205,6 +213,23 @@ def process_caged_month(year: int, month: int) -> pd.DataFrame:
         )
         frames.append(month_df)
 
+        filtered_comp = chunk[chunk[col_map["municipio"]].isin(MUNICIPIOS_COMPARATIVO_CAGED.keys())].copy()
+        if not filtered_comp.empty:
+            filtered_comp["ano_referencia"] = int(year)
+            filtered_comp["mes_referencia"] = int(month)
+            filtered_comp["saldomovimentacao"] = (
+                pd.to_numeric(filtered_comp[col_map["saldo"]], errors="coerce").fillna(0).astype(int)
+            )
+            comp_df = pd.DataFrame(
+                {
+                    "ano_referencia": filtered_comp["ano_referencia"],
+                    "mes_referencia": filtered_comp["mes_referencia"],
+                    "municipio_codigo": filtered_comp[col_map["municipio"]].astype(int),
+                    "Saldo": filtered_comp["saldomovimentacao"],
+                }
+            )
+            frames_comp.append(comp_df)
+
         if idx % 10 == 0:
             log(f"Mês {year_txt}-{month_txt}: chunk {idx} processado, linhas acumuladas: {sum(len(f) for f in frames)}")
 
@@ -220,24 +245,43 @@ def process_caged_month(year: int, month: int) -> pd.DataFrame:
         log(f"Aviso de limpeza mês {year_txt}-{month_txt}: {cleanup_exc}")
 
     if not frames:
-        return pd.DataFrame(
-            columns=["ano_referencia", "mes_referencia", "secao", "subclasse", "saldomovimentacao", "admissao", "demissao"]
+        return (
+            pd.DataFrame(
+                columns=[
+                    "ano_referencia",
+                    "mes_referencia",
+                    "secao",
+                    "subclasse",
+                    "saldomovimentacao",
+                    "admissao",
+                    "demissao",
+                ]
+            ),
+            pd.DataFrame(columns=["ano_referencia", "mes_referencia", "municipio_codigo", "Saldo"]),
         )
 
     month_all = pd.concat(frames, ignore_index=True)
-    return month_all
+    month_comp = (
+        pd.concat(frames_comp, ignore_index=True)
+        if frames_comp
+        else pd.DataFrame(columns=["ano_referencia", "mes_referencia", "municipio_codigo", "Saldo"])
+    )
+    return month_all, month_comp
 
 
-def run_caged_etl() -> pd.DataFrame:
+def run_caged_etl() -> Tuple[pd.DataFrame, pd.DataFrame]:
     log("ETL CAGED iniciado.")
     periods = build_caged_periods(START_YEAR, START_MONTH)
     log(f"CAGED será processado de {START_YEAR}-{START_MONTH:02d} até {CURRENT_DATE.year}-{CURRENT_DATE.month:02d}.")
     monthly_results = []
+    comp_results = []
     for year, month in periods:
         try:
-            month_df = process_caged_month(year, month)
+            month_df, month_comp = process_caged_month(year, month)
             log(f"CAGED mês {year}-{month:02d} finalizado. Linhas de Botucatu: {len(month_df)}")
             monthly_results.append(month_df)
+            if not month_comp.empty:
+                comp_results.append(month_comp)
         except Exception as exc:
             log(f"Erro ao processar mês {year}-{month:02d}: {exc}")
 
@@ -247,7 +291,7 @@ def run_caged_etl() -> pd.DataFrame:
     caged = pd.concat(monthly_results, ignore_index=True)
     if caged.empty:
         log("CAGED consolidado vazio para Botucatu.")
-        return caged
+        return caged, pd.DataFrame(columns=["ano_referencia", "mes_referencia", "Municipio", "Saldo"])
 
     caged = (
         caged.groupby(["ano_referencia", "mes_referencia", "secao", "subclasse"], as_index=False)[
@@ -258,7 +302,17 @@ def run_caged_etl() -> pd.DataFrame:
     )
     caged["subclasse"] = caged["subclasse"].map(normalize_subclasse_code)
     caged["estoque_anual_2026"] = caged.groupby(["secao", "subclasse"])["saldomovimentacao"].transform("sum")
-    return caged
+    comp = pd.DataFrame(columns=["ano_referencia", "mes_referencia", "Municipio", "Saldo"])
+    if comp_results:
+        comp = pd.concat(comp_results, ignore_index=True)
+        comp = (
+            comp.groupby(["ano_referencia", "mes_referencia", "municipio_codigo"], as_index=False)["Saldo"]
+            .sum()
+            .sort_values(["ano_referencia", "mes_referencia", "municipio_codigo"])
+        )
+        comp["Municipio"] = comp["municipio_codigo"].map(MUNICIPIOS_COMPARATIVO_CAGED).fillna("Outros")
+        comp = comp[["ano_referencia", "mes_referencia", "Municipio", "Saldo"]]
+    return caged, comp
 
 
 def fetch_siconfi_json() -> Dict:
@@ -426,15 +480,17 @@ def build_estban_like_dataset(siconfi: pd.DataFrame) -> pd.DataFrame:
     return estban
 
 
-def export_outputs(caged: pd.DataFrame, siconfi: pd.DataFrame) -> None:
+def export_outputs(caged: pd.DataFrame, siconfi: pd.DataFrame, caged_comp: pd.DataFrame) -> None:
     out_caged = BASE_DIR / "caged_botucatu_q1_2026.csv"
     out_fin = BASE_DIR / "financas_botucatu_2026.csv"
     out_estban = BASE_DIR / "estban_botucatu_2025_2026.csv"
+    out_comp = BASE_DIR / "caged_comparativo_municipios.csv"
     out_caged_app = BASE_DIR / "relatorio_botucatu_q1_2026.csv"
     out_fin_app = BASE_DIR / "investimentos_botucatu_2026.csv"
 
     caged = enrich_caged_with_cnae_descriptions(caged)
     caged.to_csv(out_caged, sep=";", encoding="utf-8-sig", index=False)
+    caged_comp.to_csv(out_comp, sep=";", encoding="utf-8-sig", index=False)
     siconfi.to_csv(out_fin, sep=";", encoding="utf-8-sig", index=False, decimal=",")
     estban = build_estban_like_dataset(siconfi)
     estban.to_csv(out_estban, sep=";", encoding="utf-8-sig", index=False, decimal=",")
@@ -452,6 +508,7 @@ def export_outputs(caged: pd.DataFrame, siconfi: pd.DataFrame) -> None:
     fin_app.to_csv(out_fin_app, sep=";", encoding="utf-8-sig", index=False, decimal=",")
 
     log(f"Exportação CAGED concluída: {out_caged.name} ({len(caged)} linhas)")
+    log(f"Exportação comparativo CAGED concluída: {out_comp.name} ({len(caged_comp)} linhas)")
     log(f"Exportação Finanças concluída: {out_fin.name} ({len(siconfi)} linhas)")
     log(f"Exportação ESTBAN-like concluída: {out_estban.name} ({len(estban)} linhas)")
     log("Arquivos de compatibilidade do app também foram gerados na raiz do projeto.")
@@ -463,9 +520,9 @@ def main() -> None:
     WORK_DIR.mkdir(parents=True, exist_ok=True)
 
     try:
-        caged = run_caged_etl()
+        caged, caged_comp = run_caged_etl()
         siconfi = run_siconfi_etl()
-        export_outputs(caged, siconfi)
+        export_outputs(caged, siconfi, caged_comp)
         elapsed = time.time() - start
         log(f"Pipeline finalizado com sucesso em {elapsed:.1f}s.")
     finally:
