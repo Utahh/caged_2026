@@ -295,6 +295,20 @@ def csv_bytes_from_pandas(df) -> bytes:
     return df.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
 
 
+def aplicar_layout_clean(fig, unified_hover: bool = False):
+    fig.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=16, r=56, t=56, b=36),
+        xaxis=dict(automargin=True),
+        yaxis=dict(automargin=True),
+        hoverlabel=dict(font_size=13),
+    )
+    if unified_hover:
+        fig.update_layout(hovermode="x unified")
+    return fig
+
+
 def processar_kpis_financeiros(
     df_fin: pl.DataFrame, mes_atual: int, ano_atual: int, instituicao_filtro: str = "Todas"
 ) -> tuple[dict, pl.DataFrame, pl.DataFrame]:
@@ -708,15 +722,9 @@ if not caged.is_empty():
             textfont=dict(size=10),
         )
     )
-    fig_line.update_layout(
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        title="Admissões x Desligamentos",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-        xaxis=dict(nticks=6),
-        margin=dict(l=16, r=40, t=56, b=32),
-        yaxis=dict(automargin=True),
-    )
+    fig_line.update_layout(title="Admissões x Desligamentos", legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0))
+    fig_line.update_xaxes(nticks=6)
+    aplicar_layout_clean(fig_line, unified_hover=True)
     st.plotly_chart(fig_line, theme="streamlit", use_container_width=True)
     st.download_button(
         "Exportar CSV - Admissões x Desligamentos",
@@ -734,11 +742,7 @@ if not caged.is_empty():
         textposition="outside",
         cliponaxis=False,
     )
-    fig_bar.update_layout(
-        margin=dict(l=16, r=40, t=56, b=32),
-        xaxis=dict(automargin=True),
-        yaxis=dict(automargin=True),
-    )
+    aplicar_layout_clean(fig_bar)
     st.plotly_chart(fig_bar, theme="streamlit", use_container_width=True)
     st.download_button(
         "Exportar CSV - Evolução do Saldo",
@@ -778,16 +782,13 @@ if not caged.is_empty():
                 hovertemplate="%{x}<br>%{customdata}<extra>%{fullData.name}</extra>",
                 customdata=comp_pd["Saldo_BR"],
                 text=comp_pd["Saldo_BR"],
+                mode="lines+markers+text",
                 textposition="top center",
                 textfont=dict(size=9),
+                cliponaxis=False,
             )
-            fig_comp.update_layout(
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-                xaxis=dict(nticks=6, automargin=True),
-                yaxis=dict(automargin=True),
-                margin=dict(l=16, r=40, t=56, b=32),
-            )
+            fig_comp.update_xaxes(nticks=6)
+            aplicar_layout_clean(fig_comp, unified_hover=True)
             st.plotly_chart(fig_comp, theme="streamlit", use_container_width=True)
             st.download_button(
                 "Exportar CSV - Comparativo Municípios",
@@ -848,14 +849,8 @@ if not caged.is_empty():
         hovertemplate="%{x:,.0f}<extra></extra>",
         cliponaxis=False,
     )
-    fig_hbar.update_layout(
-        yaxis=dict(categoryorder="total ascending"),
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=16, r=52, t=56, b=24),
-        xaxis=dict(automargin=True),
-        yaxis_automargin=True,
-    )
+    fig_hbar.update_yaxes(categoryorder="total ascending")
+    aplicar_layout_clean(fig_hbar)
     st.plotly_chart(fig_hbar, theme="streamlit", use_container_width=True)
     st.download_button(
         "Exportar CSV - Saldo por Atividade",
@@ -939,16 +934,14 @@ try:
                     hovertemplate="%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
                     customdata=evo_pd[["Mês Extenso", "Total BRL"]].values,
                     text=evo_pd["Total BRL"],
+                    mode="lines+markers+text",
                     textposition="top center",
                     textfont=dict(size=9),
+                    cliponaxis=False,
                 )
-                fig_evo.update_layout(
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    xaxis=dict(showgrid=False, nticks=6),
-                    yaxis=dict(showgrid=False),
-                    margin=dict(l=16, r=52, t=56, b=32),
-                )
+                fig_evo.update_xaxes(showgrid=False, nticks=6)
+                fig_evo.update_yaxes(showgrid=False)
+                aplicar_layout_clean(fig_evo, unified_hover=True)
                 st.plotly_chart(fig_evo, theme="streamlit", use_container_width=True)
                 st.download_button(
                     "Exportar CSV - Evolução Financeira",
@@ -983,10 +976,9 @@ try:
                 fig_dist.update_layout(
                     yaxis=dict(categoryorder="total ascending", showgrid=False),
                     xaxis=dict(visible=False, showgrid=False),
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    paper_bgcolor="rgba(0,0,0,0)",
                     margin=dict(r=110),
                 )
+                aplicar_layout_clean(fig_dist)
                 evt = st.plotly_chart(
                     fig_dist,
                     theme="streamlit",
