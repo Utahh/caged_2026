@@ -57,7 +57,21 @@ st.markdown(
             border-radius: 12px;
             overflow: hidden;
         }
+        [data-testid="stPlotlyChart"] .js-plotly-plot,
+        [data-testid="stPlotlyChart"] {
+            touch-action: pan-y pinch-zoom;
+        }
+        button[data-testid="baseButton-secondary"],
+        button[data-testid="baseButton-primary"] {
+            min-height: 44px;
+            border-radius: 10px;
+        }
         @media (max-width: 768px) {
+            .block-container {
+                padding-left: 0.75rem !important;
+                padding-right: 0.75rem !important;
+                padding-top: 0.75rem !important;
+            }
             div[data-testid="column"] {
                 width: 100% !important;
                 flex: 1 1 100% !important;
@@ -303,10 +317,41 @@ def aplicar_layout_clean(fig, unified_hover: bool = False):
         xaxis=dict(automargin=True),
         yaxis=dict(automargin=True),
         hoverlabel=dict(font_size=13),
+        dragmode=False,
     )
     if unified_hover:
         fig.update_layout(hovermode="x unified")
     return fig
+
+
+PLOTLY_CONFIG: dict = {
+    "scrollZoom": False,
+    "doubleClick": False,
+    "displayModeBar": "hover",
+    "modeBarButtonsToRemove": [
+        "lasso2d",
+        "select2d",
+        "zoom2d",
+        "pan2d",
+        "zoomIn2d",
+        "zoomOut2d",
+        "autoScale2d",
+        "resetScale2d",
+    ],
+}
+
+
+def plotly_mobile_friendly(fig, *, key: str, **kwargs) -> None:
+    """Evita que o gráfico roube o scroll vertical no celular; hover continua disponível."""
+    extra_cfg = kwargs.pop("config", {})
+    st.plotly_chart(
+        fig,
+        theme="streamlit",
+        use_container_width=True,
+        config={**PLOTLY_CONFIG, **extra_cfg},
+        key=key,
+        **kwargs,
+    )
 
 
 def processar_kpis_financeiros(
@@ -597,11 +642,11 @@ caged_comp = (
     else caged_comp_raw
 )
 
-st.title("📊 Dashboard Executivo Março 2026")
+st.title("CAGED e finanças municipais")
 
 menu_l, menu_r = st.columns([9, 1])
 with menu_l:
-    with st.popover("☰ Filtros"):
+    with st.popover("Filtros e período"):
         anos_disponiveis = (
             sorted(caged.select(pl.col("ano_referencia").unique()).to_series().drop_nulls().to_list())
             if not caged.is_empty() and "ano_referencia" in caged.columns
@@ -630,8 +675,17 @@ with menu_l:
 with menu_r:
     st.empty()
 
+st.caption(
+    f"Período ativo: **{MESES[month]}/{ano}**. Nos celulares, a página rola com prioridade; "
+    "ferramentas extras do gráfico ficam no menu discreto (canto, ao passar o dedo)."
+)
+st.caption(
+    "Emprego formal (CAGED) e posição de caixa, aplicações e poupança (consolidado municipal, referência Siconfi/ESTBAN)."
+)
+
 if not caged.is_empty():
-    st.markdown("## Emprego (CAGED)")
+    st.markdown("## Emprego formal (CAGED)")
+    st.caption("Admissões, desligamentos, saldo e estoque — com evolução em 12 meses e comparativo entre municípios.")
     c = caged.filter(pl.col("ano_referencia") == ano)
     if grupo != "Todos":
         c = c.filter(pl.col("Grande Grupo") == grupo)
@@ -692,7 +746,8 @@ if not caged.is_empty():
     monthly_pd["Desligamentos_BR"] = monthly_pd["Desligamentos"].apply(lambda v: br_int(float(v)))
     monthly_pd["Saldo_BR"] = monthly_pd["Saldo"].apply(lambda v: br_int(float(v)))
 
-    st.markdown("## Evolução Mensal CAGED")
+    st.markdown("### Evolução mensal — admissões e desligamentos")
+    st.caption("Últimos 12 meses no período selecionado; valores no hover. Exporte a série em CSV abaixo.")
     fig_line = go.Figure()
     fig_line.add_trace(
         go.Scatter(
@@ -725,13 +780,14 @@ if not caged.is_empty():
     fig_line.update_layout(title="Admissões x Desligamentos", legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0))
     fig_line.update_xaxes(nticks=6)
     aplicar_layout_clean(fig_line, unified_hover=True)
-    st.plotly_chart(fig_line, theme="streamlit", use_container_width=True)
+    plotly_mobile_friendly(fig_line, key="pl_caged_line")
     st.download_button(
-        "Exportar CSV - Admissões x Desligamentos",
+        "Baixar CSV — admissões e desligamentos (mensal)",
         data=csv_bytes_from_pandas(monthly_pd[["Mês", "Admissões", "Desligamentos"]]),
         file_name="caged_admissoes_desligamentos.csv",
         mime="text/csv",
         key="dl_caged_line",
+        use_container_width=True,
     )
 
     fig_bar = px.bar(monthly_pd, x="Mês Curto", y="Saldo", title="Evolução do Saldo Mensal", text="Saldo_BR")
@@ -743,17 +799,19 @@ if not caged.is_empty():
         cliponaxis=False,
     )
     aplicar_layout_clean(fig_bar)
-    st.plotly_chart(fig_bar, theme="streamlit", use_container_width=True)
+    plotly_mobile_friendly(fig_bar, key="pl_caged_bar")
     st.download_button(
-        "Exportar CSV - Evolução do Saldo",
+        "Baixar CSV — saldo mensal (CAGED)",
         data=csv_bytes_from_pandas(monthly_pd[["Mês", "Saldo"]]),
         file_name="caged_evolucao_saldo.csv",
         mime="text/csv",
         key="dl_caged_bar",
+        use_container_width=True,
     )
 
     if not caged_comp.is_empty():
-        st.markdown("## Comparativo de Saldo CAGED entre Municípios")
+        st.markdown("### Comparativo de saldo entre municípios")
+        st.caption("Linhas por cidade; eixo com até 12 meses. Escolha municípios em Filtros e período.")
         comp_12m = caged_comp.with_columns((pl.col("ano_referencia") * 12 + pl.col("mes_referencia")).alias("ord_mes"))
         comp_12m = comp_12m.filter((pl.col("ord_mes") >= ord_atual - 11) & (pl.col("ord_mes") <= ord_atual))
         if cidades_selecionadas:
@@ -789,13 +847,14 @@ if not caged.is_empty():
             )
             fig_comp.update_xaxes(nticks=6)
             aplicar_layout_clean(fig_comp, unified_hover=True)
-            st.plotly_chart(fig_comp, theme="streamlit", use_container_width=True)
+            plotly_mobile_friendly(fig_comp, key="pl_caged_comp")
             st.download_button(
-                "Exportar CSV - Comparativo Municípios",
+                "Baixar CSV — saldo por município e mês",
                 data=csv_bytes_from_pandas(comp_pd[["ano_referencia", "mes_referencia", "Municipio", "Saldo"]]),
                 file_name="caged_comparativo_municipios.csv",
                 mime="text/csv",
                 key="dl_caged_comp",
+                use_container_width=True,
             )
         else:
             st.info("Sem dados suficientes para o comparativo de municípios no período selecionado.")
@@ -834,7 +893,8 @@ if not caged.is_empty():
     )
     saldo_atividade_pd = saldo_atividade.to_pandas()
 
-    st.markdown("## Saldo por Atividade Econômica")
+    st.markdown("### Saldo por atividade econômica")
+    st.caption("Dez atividades com maior saldo no mês filtrado (CNAE agregado).")
     fig_hbar = px.bar(
         saldo_atividade_pd,
         x="Saldo",
@@ -851,16 +911,18 @@ if not caged.is_empty():
     )
     fig_hbar.update_yaxes(categoryorder="total ascending")
     aplicar_layout_clean(fig_hbar)
-    st.plotly_chart(fig_hbar, theme="streamlit", use_container_width=True)
+    plotly_mobile_friendly(fig_hbar, key="pl_caged_hbar")
     st.download_button(
-        "Exportar CSV - Saldo por Atividade",
+        "Baixar CSV — saldo por atividade",
         data=csv_bytes_from_pandas(saldo_atividade_pd),
         file_name="caged_saldo_por_atividade.csv",
         mime="text/csv",
         key="dl_caged_hbar",
+        use_container_width=True,
     )
 
-    st.markdown(f"## Top 5 Subclasses ({MESES[month]}/{ano})")
+    st.markdown(f"### Ranking CNAE — subclasses ({MESES[month]}/{ano})")
+    st.caption("Cinco maiores e cinco menores saldos no mês; tabelas com exportação única abaixo.")
     a1, a2 = st.columns(2)
     with a1:
         st.markdown("### Maiores Saldos")
@@ -878,9 +940,31 @@ if not caged.is_empty():
             hide_index=True,
             height=220,
         )
+    top_m_export = pl.concat(
+        [
+            top_maiores.select(["CNAE 2.0 Subclasse", "Saldo", "Admissões", "Desligamentos", "% Impacto"]).with_columns(
+                pl.lit("Entre os 5 maiores saldos").alias("Grupo")
+            ),
+            top_menores.select(["CNAE 2.0 Subclasse", "Saldo", "Admissões", "Desligamentos", "% Impacto"]).with_columns(
+                pl.lit("Entre os 5 menores saldos").alias("Grupo")
+            ),
+        ]
+    )
+    st.download_button(
+        "Baixar CSV — ranking CNAE (maiores e menores)",
+        data=csv_bytes_from_pandas(top_m_export.to_pandas()),
+        file_name="caged_ranking_cnae_top5.csv",
+        mime="text/csv",
+        key="dl_caged_cnae_rank",
+        use_container_width=True,
+    )
 
 st.divider()
-st.header("📊 Visão Financeira e Liquidez (Caixa e Aplicações)")
+st.header("Caixa, aplicações e poupança")
+st.caption(
+    "Liquidez municipal consolidada (valores em reais). Filtre por instituição no seletor abaixo do gráfico de barras "
+    "(em telas largas, ele fica à direita da evolução)."
+)
 
 try:
     if fin.is_empty():
@@ -942,13 +1026,15 @@ try:
                 fig_evo.update_xaxes(showgrid=False, nticks=6)
                 fig_evo.update_yaxes(showgrid=False)
                 aplicar_layout_clean(fig_evo, unified_hover=True)
-                st.plotly_chart(fig_evo, theme="streamlit", use_container_width=True)
+                st.markdown("#### Evolução do saldo (12 meses)")
+                plotly_mobile_friendly(fig_evo, key="pl_fin_evo")
                 st.download_button(
-                    "Exportar CSV - Evolução Financeira",
+                    "Baixar CSV — evolução financeira (mensal)",
                     data=csv_bytes_from_pandas(evo_pd[["Ano", "Mes", "Total"]]),
                     file_name="financeiro_evolucao_12_meses.csv",
                     mime="text/csv",
                     key="dl_fin_evo",
+                    use_container_width=True,
                 )
 
         with c2:
@@ -979,35 +1065,25 @@ try:
                     margin=dict(r=110),
                 )
                 aplicar_layout_clean(fig_dist)
-                evt = st.plotly_chart(
-                    fig_dist,
-                    theme="streamlit",
-                    use_container_width=True,
-                    on_select="rerun",
-                    selection_mode="points",
+                st.markdown("#### Saldo por instituição")
+                st.caption(
+                    "O gráfico é só leitura no celular (não filtra ao tocar), para a rolagem da página fluir. "
+                    "Use a lista abaixo para recalcular os indicadores."
                 )
-                try:
-                    points = evt.get("selection", {}).get("points", []) if isinstance(evt, dict) else []
-                    if points:
-                        y_val = points[0].get("y")
-                        if y_val:
-                            st.session_state["instituicao_filtro"] = str(y_val)
-                    elif "instituicao_filtro" not in st.session_state:
-                        st.session_state["instituicao_filtro"] = "Todas"
-                except Exception:
-                    pass
+                plotly_mobile_friendly(fig_dist, key="pl_fin_dist")
                 st.selectbox(
-                    "Instituição (filtro)",
+                    "Filtrar indicadores por instituição",
                     instituicoes_disponiveis,
                     key="instituicao_filtro",
-                    help="Toque na barra ou selecione manualmente.",
+                    help="Apenas esta lista altera os totais acima; tocar nas barras não dispara ação.",
                 )
                 st.download_button(
-                    "Exportar CSV - Saldo por Instituição",
+                    "Baixar CSV — saldo por instituição",
                     data=csv_bytes_from_pandas(dist_pd[["Instituicao", "Total"]]),
                     file_name="financeiro_saldo_por_instituicao.csv",
                     mime="text/csv",
                     key="dl_fin_dist",
+                    use_container_width=True,
                 )
 
         st.caption(
