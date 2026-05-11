@@ -523,6 +523,17 @@ def main() -> None:
         caged, caged_comp = run_caged_etl()
         siconfi = run_siconfi_etl()
         export_outputs(caged, siconfi, caged_comp)
+        if os.environ.get("PIPELINE_INCLUDE_CNPJ") == "1":
+            from cnpj_botucatu_etl import cleanup_workdir as cleanup_cnpj_workdir
+            from cnpj_botucatu_etl import export_cnpj_csvs, run_cnpj_botucatu_etl
+
+            log("PIPELINE_INCLUDE_CNPJ=1 — iniciando ETL Cadastro CNPJ / MEI (pode levar vários minutos e ~4GB download).")
+            try:
+                cnpj_dfs = run_cnpj_botucatu_etl()
+                export_cnpj_csvs(cnpj_dfs)
+            finally:
+                cleanup_cnpj_workdir()
+                log("Limpeza do diretório temporário CNPJ concluída.")
         elapsed = time.time() - start
         log(f"Pipeline finalizado com sucesso em {elapsed:.1f}s.")
     finally:

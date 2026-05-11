@@ -29,7 +29,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Validate Python syntax
-        run: python -m py_compile app.py pipeline_botucatu.py
+        run: python -m py_compile app.py pipeline_botucatu.py cnpj_botucatu_etl.py
 
       - name: Streamlit smoke import
         run: python -c "import streamlit, pandas, plotly; print('deps ok')"
@@ -63,6 +63,9 @@ jobs:
       - name: Commit refreshed CSVs (if changed)
         run: |
           git add caged_botucatu_q1_2026.csv caged_comparativo_municipios.csv financas_botucatu_2026.csv estban_botucatu_2025_2026.csv relatorio_botucatu_q1_2026.csv investimentos_botucatu_2026.csv
+          for f in cnpj_botucatu_resumo.csv cnpj_botucatu_mei_mensal.csv cnpj_botucatu_porte_pct.csv cnpj_botucatu_cnae_x_tipo.csv; do
+            if [ -f "$f" ]; then git add "$f"; fi
+          done
           if git diff --staged --quiet; then
             echo "No dataset changes to commit."
             exit 0
@@ -89,6 +92,9 @@ jobs:
           if [ -f caged_comparativo_municipios.csv ]; then cp caged_comparativo_municipios.csv dist/; fi
           if [ -f investimentos_botucatu_2026.csv ]; then cp investimentos_botucatu_2026.csv dist/; fi
           if [ -f estban_botucatu_2025_2026.csv ]; then cp estban_botucatu_2025_2026.csv dist/; fi
+          for f in cnpj_botucatu_resumo.csv cnpj_botucatu_mei_mensal.csv cnpj_botucatu_porte_pct.csv cnpj_botucatu_cnae_x_tipo.csv; do
+            if [ -f "$f" ]; then cp "$f" dist/; fi
+          done
           tar -czf observatorio-botucatu.tar.gz dist
 
       - name: Upload artifact

@@ -18,6 +18,7 @@ Painel web interativo construído com Streamlit e Plotly para acompanhamento de 
 .
 ├── app.py                          # Entry-point do Streamlit (deploy)
 ├── pipeline_botucatu.py            # Entry-point do ETL
+├── cnpj_botucatu_etl.py           # ETL opcional CNPJ/MEI (Receita Federal, dados abertos)
 ├── data/                           # Espaço para datasets e artefatos
 ├── scripts/                        # Scripts operacionais (ex.: run_pipeline.py)
 ├── src/                            # Módulos reutilizáveis (expansão futura)
@@ -85,11 +86,27 @@ Esse pipeline único executa em sequência:
      - `relatorio_botucatu_q1_2026.csv`
      - `investimentos_botucatu_2026.csv`
 
+4. **Cadastro CNPJ / MEI (opcional)** — módulo `cnpj_botucatu_etl.py`, acionado **somente** se existir a variável de ambiente `PIPELINE_INCLUDE_CNPJ=1`:
+   - baixa os ZIPs públicos `Estabelecimentos0..9`, `Empresas*` e `Simples` (URL padrão: release espelho no GitHub; ~vários GB);
+   - filtra estabelecimentos com município IBGE **3507506** (Botucatu);
+   - cruza `Empresas` (porte) e `Simples` (MEI, datas de opção/exclusão);
+   - gera `cnpj_botucatu_resumo.csv`, `cnpj_botucatu_mei_mensal.csv`, `cnpj_botucatu_porte_pct.csv`, `cnpj_botucatu_cnae_x_tipo.csv` na raiz do projeto;
+   - o job agendado do GitHub **não** inclui essa etapa por padrão (tempo e disco). Rode localmente ou em `workflow_dispatch` com a variável configurada no ambiente do runner, se desejar versionar esses CSVs.
+
 ### Rodar pipeline mestre
 
 ```bash
 python pipeline_botucatu.py
 ```
+
+Com CNPJ/MEI (máquina com espaço em disco e boa rede):
+
+```bash
+set PIPELINE_INCLUDE_CNPJ=1
+python pipeline_botucatu.py
+```
+
+(Linux/macOS: `export PIPELINE_INCLUDE_CNPJ=1`. Opcional: `CNPJ_BASE_URL` apontando para outra pasta de snapshot da Receita ou espelho.)
 
 ## Funcionalidades do MVP
 
@@ -108,6 +125,12 @@ python pipeline_botucatu.py
 
 - **Financeiro (Siconfi)**
   - Card com valor total mais recente de `Saldo_em_Reais` formatado em R$.
+
+- **Cadastro CNPJ e MEI (quando os CSVs existirem na raiz ou em `data/`)**
+  - Totais de empresas (raiz), estabelecimentos no município, MEI ativos/inativos e opção no Simples.
+  - Gráfico de barras com opções e exclusões MEI por mês (datas do `Simples`).
+  - Distribuição percentual por tipo (MEI, EPP, ME, etc.).
+  - CNAE (divisão) por tipo de empresa, com filtro e exportação CSV.
 
 - **Resiliência**
   - Validação da existência dos CSVs com `os.path.exists()`.
