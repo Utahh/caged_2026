@@ -984,7 +984,7 @@ if has_cnpj_export:
     st.caption(
         "Empresas com ao menos um estabelecimento no município (IBGE 3507506). "
         "MEI: opção pelo Simples sem data de exclusão; ativo/inativo conforme situação cadastral do estabelecimento representativo (matriz no município, se houver). "
-        "Fonte: dados abertos da Receita Federal (cadastro CNPJ + Simples)."
+        "Fonte: dados abertos da Receita Federal (pasta mensal no portal; a URL exata usada na extração aparece abaixo em `fonte_url`)."
     )
     rs = cnpj_resumo_raw.to_dicts()[0]
     fu = str(rs.get("fonte_url", "") or "")
@@ -996,6 +996,15 @@ if has_cnpj_export:
     m3.metric("MEI ativos", br_int(float(rs.get("mei_ativos", 0) or 0)))
     m4.metric("MEI inativos (CNPJ)", br_int(float(rs.get("mei_inativos_cnpj", 0) or 0)))
     m5.metric("MEI no Simples (sem exclusão)", br_int(float(rs.get("mei_opcao_sem_exclusao", 0) or 0)))
+
+    tot_e = float(rs.get("total_empresas", 0) or 0)
+    mei_any = float(rs.get("mei_opcao_sem_exclusao", 0) or 0)
+    if tot_e > 0 and mei_any == 0:
+        st.warning(
+            "MEI zerado com empresas encontradas: em geral a pasta de dados (`CNPJ_DADOS_ABERTOS_REF` / `CNPJ_BASE_URL`) "
+            "não bate com o layout do `Simples.zip` (colunas) ou o mês ainda não foi publicado no portal da RFB. "
+            "Ajuste a competência e rode de novo o pipeline com `PIPELINE_INCLUDE_CNPJ=1`."
+        )
 
     with st.expander("Glossário rápido"):
         st.markdown(

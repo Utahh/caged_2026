@@ -8,7 +8,9 @@ Uso típico (local ou runner com disco/rede):
   set PIPELINE_INCLUDE_CNPJ=1
   python pipeline_botucatu.py
 
-URLs padrão apontam para release espelho estável (GitHub). Sobrescreva com CNPJ_BASE_URL se necessário.
+Fonte padrão: portal oficial de dados abertos da RFB (pasta mensal `.../AAAA-MM/`).
+Sobrescreva com `CNPJ_BASE_URL` (URL completa da pasta, com barra final) ou ajuste só o mês com
+`CNPJ_DADOS_ABERTOS_REF` (ex.: `2026-03`). Espelhos (GitHub, etc.) são opcionais via `CNPJ_BASE_URL`.
 """
 
 from __future__ import annotations
@@ -17,7 +19,9 @@ import os
 import re
 import shutil
 import time
+import unicodedata
 import zipfile
+from datetime import date
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
@@ -28,15 +32,73 @@ BASE_DIR = Path(__file__).resolve().parent
 WORK_DIR = BASE_DIR / "tmp_cnpj_botucatu"
 BOTUCATU_IBGE_7 = "3507506"
 # A coluna "município" dos Estabelecimentos usa o código interno da tabela Municipios.zip (ex.: 6249), não o IBGE de 7 dígitos.
-# Release público com arquivos no layout clássico (sem cabeçalho, separador ;)
-DEFAULT_CNPJ_BASE = os.environ.get(
-    "CNPJ_BASE_URL",
-    "https://github.com/jonathands/dados-abertos-receita-cnpj/releases/download/2024.09/",
-)
+
+
+def _subtract_months(y: int, m: int, n: int) -> Tuple[int, int]:
+    for _ in range(n):
+        if m == 1:
+            y, m = y - 1, 12
+        else:
+            m -= 1
+    return y, m
+
+
+def default_cnpj_open_data_ref() -> str:
+    """Competência mensal sugerida (mês civil atual menos 2 — atraso típico da publicação RFB)."""
+    y, m = _subtract_months(date.today().year, date.today().month, 2)
+    return f"{y}-{m:02d}"
+
+
+def resolve_cnpj_base_url() -> str:
+    """
+    URL da pasta que contém Municipios.zip, Estabelecimentos*.zip, Empresas*.zip, Simples.zip.
+
+    Ordem: `CNPJ_BASE_URL` (pasta completa) > `https://dadosabertos.rfb.gov.br/CNPJ/dados_abertos_cnpj/{CNPJ_DADOS_ABERTOS_REF}/`
+    """
+    explicit = os.environ.get("CNPJ_BASE_URL", "").strip()
+    if explicit:
+        return explicit if explicit.endswith("/") else explicit + "/"
+    ref = os.environ.get("CNPJ_DADOS_ABERTOS_REF", "").strip() or default_cnpj_open_data_ref()
+    return f"https://dadosabertos.rfb.gov.br/CNPJ/dados_abertos_cnpj/{ref}/"
 
 
 def log(msg: str) -> None:
     print(f"[CNPJ] {msg}", flush=True)
+
+
+def normalize_col_map(columns: Iterable[str]) -> Dict[str, str]:
+    mapped: Dict[str, str] = {}
+    for c in columns:
+        raw = str(c).strip().lower()
+        ascii_key = (
+            unicodedata.normalize("NFKD", raw)
+            .encode("ascii", "ignore")
+            .decode("ascii")
+            .strip()
+            .lower()
+        )
+        mapped[ascii_key] = str(c).strip()
+    return mapped
+
+
+def first_column_present(col_map: Dict[str, str], candidates: List[str]) -> Optional[str]:
+    for key in candidates:
+        if key in col_map:
+            return col_map[key]
+    return None
+
+
+def simples_csv_first_row_looks_like_header(csv_path: Path) -> bool:
+    """Layout novo da RFB traz cabeçalho com nomes de campo; o legado começa direto com CNPJ numérico."""
+    with csv_path.open("r", encoding="latin-1", errors="ignore") as f:
+        line = f.readline()
+    if not line.strip():
+        return False
+    cell0 = line.split(";")[0].strip()
+    if any(ch.isalpha() for ch in cell0):
+        return True
+    low = cell0.lower()
+    return "cnpj" in low
 
 
 def norm_cnpj_basico(v: object) -> str:
@@ -210,11 +272,23 @@ def iter_estabelecimentos_botucatu(
             pass
 
 
+def _resolve_empresas_header_columns(columns: Iterable[str]) -> Optional[Tuple[str, str]]:
+    cm = normalize_col_map(columns)
+    c0 = first_column_present(cm, ["cnpj_basico", "cnpj", "nmcnpjbasico", "nr_cnpj_basico"])
+    c1 = first_column_present(
+        cm,
+        ["porte_empresa", "porte", "cod_porte", "porteempresa", "porte_empressa"],
+    )
+    if c0 and c1:
+        return (c0, c1)
+    return None
+
+
 def load_empresas_for_bases(
     work_dir: Path, base_url: str, bases: Set[str], digits_needed: Set[str]
 ) -> pd.DataFrame:
     frames: List[pd.DataFrame] = []
-    usecols = [0, 5]
+    usecols_legacy = [0, 5]
     for d in sorted(digits_needed):
         url = f"{base_url.rstrip('/')}/Empresas{d}.zip"
         zpath = work_dir / f"Empresas{d}.zip"
@@ -225,21 +299,46 @@ def load_empresas_for_bases(
             with zipfile.ZipFile(zpath, "r") as z:
                 member = first_member_csv(z)
                 tmp_e.write_bytes(z.read(member))
-            for chunk in pd.read_csv(
-                tmp_e,
-                sep=";",
-                header=None,
-                usecols=usecols,
-                names=["cnpj_basico", "porte_empresa"],
-                dtype=str,
-                encoding="latin-1",
-                chunksize=300_000,
-                low_memory=False,
-            ):
-                chunk["cnpj_basico"] = chunk["cnpj_basico"].map(norm_cnpj_basico)
-                hit = chunk[chunk["cnpj_basico"].isin(bases)]
-                if not hit.empty:
-                    frames.append(hit.drop_duplicates("cnpj_basico"))
+            hdr = None
+            if simples_csv_first_row_looks_like_header(tmp_e):
+                peek = pd.read_csv(tmp_e, sep=";", header=0, nrows=2, dtype=str, encoding="latin-1")
+                hdr = _resolve_empresas_header_columns(peek.columns)
+                if hdr:
+                    log(f"Empresas{d}: layout com cabeçalho (colunas {hdr[0]}, {hdr[1]}).")
+            if hdr:
+                c0, c1 = hdr
+                for chunk in pd.read_csv(
+                    tmp_e,
+                    sep=";",
+                    header=0,
+                    dtype=str,
+                    encoding="latin-1",
+                    chunksize=300_000,
+                    low_memory=False,
+                ):
+                    sub = chunk[[c0, c1]].rename(columns={c0: "cnpj_basico", c1: "porte_empresa"})
+                    sub["cnpj_basico"] = sub["cnpj_basico"].map(norm_cnpj_basico)
+                    hit = sub[sub["cnpj_basico"].isin(bases)]
+                    if not hit.empty:
+                        frames.append(hit.drop_duplicates("cnpj_basico"))
+            else:
+                if simples_csv_first_row_looks_like_header(tmp_e):
+                    log(f"Empresas{d}: cabeçalho não mapeado; usando posições legadas 0 e 5.")
+                for chunk in pd.read_csv(
+                    tmp_e,
+                    sep=";",
+                    header=None,
+                    usecols=usecols_legacy,
+                    names=["cnpj_basico", "porte_empresa"],
+                    dtype=str,
+                    encoding="latin-1",
+                    chunksize=300_000,
+                    low_memory=False,
+                ):
+                    chunk["cnpj_basico"] = chunk["cnpj_basico"].map(norm_cnpj_basico)
+                    hit = chunk[chunk["cnpj_basico"].isin(bases)]
+                    if not hit.empty:
+                        frames.append(hit.drop_duplicates("cnpj_basico"))
         finally:
             try:
                 if tmp_e.exists():
@@ -255,12 +354,43 @@ def load_empresas_for_bases(
     return pd.concat(frames, ignore_index=True).drop_duplicates("cnpj_basico")
 
 
+def _resolve_simples_header_columns(columns: Iterable[str]) -> Optional[Dict[str, str]]:
+    cm = normalize_col_map(columns)
+    c0 = first_column_present(cm, ["cnpj_basico", "cnpj", "nmcnpjbasico", "nr_cnpj_basico"])
+    c_opt = first_column_present(
+        cm,
+        ["opcao_pelo_mei", "opcao_mei", "mei", "opcao_mei_simples", "ind_opcao_mei"],
+    )
+    c_do = first_column_present(
+        cm,
+        [
+            "data_opcao_mei",
+            "data_opcao_pelo_mei",
+            "dt_opcao_mei",
+            "dataopcao_mei",
+            "dtopcao_mei",
+        ],
+    )
+    c_de = first_column_present(
+        cm,
+        [
+            "data_exclusao_mei",
+            "data_exclusao_do_mei",
+            "dt_exclusao_mei",
+            "dataexclusao_mei",
+            "dtexclusao_mei",
+        ],
+    )
+    if not (c0 and c_opt and c_do and c_de):
+        return None
+    return {"cnpj_basico": c0, "opcao_mei": c_opt, "data_opcao_mei": c_do, "data_exclusao_mei": c_de}
+
+
 def load_simples_for_bases(work_dir: Path, base_url: str, bases: Set[str]) -> pd.DataFrame:
     url = f"{base_url.rstrip('/')}/Simples.zip"
     zpath = work_dir / "Simples.zip"
     log("Baixando Simples.zip …")
     download_zip(url, zpath)
-    usecols = [0, 4, 5, 6]
     names = ["cnpj_basico", "opcao_mei", "data_opcao_mei", "data_exclusao_mei"]
     frames: List[pd.DataFrame] = []
     tmp_s = zpath.with_suffix(".extracted.csv")
@@ -268,21 +398,59 @@ def load_simples_for_bases(work_dir: Path, base_url: str, bases: Set[str]) -> pd
         with zipfile.ZipFile(zpath, "r") as z:
             member = first_member_csv(z)
             tmp_s.write_bytes(z.read(member))
-        for chunk in pd.read_csv(
-            tmp_s,
-            sep=";",
-            header=None,
-            usecols=usecols,
-            names=names,
-            dtype=str,
-            encoding="latin-1",
-            chunksize=500_000,
-            low_memory=False,
-        ):
-            chunk["cnpj_basico"] = chunk["cnpj_basico"].map(norm_cnpj_basico)
-            hit = chunk[chunk["cnpj_basico"].isin(bases)]
-            if not hit.empty:
-                frames.append(hit.drop_duplicates("cnpj_basico"))
+
+        hdr_map: Optional[Dict[str, str]] = None
+        if simples_csv_first_row_looks_like_header(tmp_s):
+            peek = pd.read_csv(tmp_s, sep=";", header=0, nrows=2, dtype=str, encoding="latin-1")
+            hdr_map = _resolve_simples_header_columns(peek.columns)
+            if hdr_map:
+                log("Simples: layout com cabeçalho (dados abertos RFB / arquivo nomeado).")
+
+        if hdr_map:
+            c0, co, cd, ce = (
+                hdr_map["cnpj_basico"],
+                hdr_map["opcao_mei"],
+                hdr_map["data_opcao_mei"],
+                hdr_map["data_exclusao_mei"],
+            )
+            for chunk in pd.read_csv(
+                tmp_s,
+                sep=";",
+                header=0,
+                dtype=str,
+                encoding="latin-1",
+                chunksize=500_000,
+                low_memory=False,
+            ):
+                sub = chunk[[c0, co, cd, ce]].rename(
+                    columns={c0: "cnpj_basico", co: "opcao_mei", cd: "data_opcao_mei", ce: "data_exclusao_mei"}
+                )
+                sub["cnpj_basico"] = sub["cnpj_basico"].map(norm_cnpj_basico)
+                hit = sub[sub["cnpj_basico"].isin(bases)]
+                if not hit.empty:
+                    frames.append(hit.drop_duplicates("cnpj_basico"))
+        elif simples_csv_first_row_looks_like_header(tmp_s):
+            log(
+                "Aviso: Simples com cabeçalho mas colunas MEI não mapeadas (nomes diferentes do esperado). "
+                "Veja LAYOUT_DADOS_ABERTOS_CNPJ.pdf na pasta oficial da RFB ou use CNPJ_BASE_URL apontando para ZIP compatível."
+            )
+        else:
+            log("Simples: layout posicional legado (sem cabeçalho; colunas 0,4,5,6).")
+            for chunk in pd.read_csv(
+                tmp_s,
+                sep=";",
+                header=None,
+                usecols=[0, 4, 5, 6],
+                names=names,
+                dtype=str,
+                encoding="latin-1",
+                chunksize=500_000,
+                low_memory=False,
+            ):
+                chunk["cnpj_basico"] = chunk["cnpj_basico"].map(norm_cnpj_basico)
+                hit = chunk[chunk["cnpj_basico"].isin(bases)]
+                if not hit.empty:
+                    frames.append(hit.drop_duplicates("cnpj_basico"))
     finally:
         try:
             if tmp_s.exists():
@@ -375,7 +543,7 @@ def norm_cnae_subclasse(v: object) -> str:
 
 
 def run_cnpj_botucatu_etl(
-    base_url: str = DEFAULT_CNPJ_BASE,
+    base_url: Optional[str] = None,
     municipio_ibge: str = BOTUCATU_IBGE_7,
     municipio_nome: str = "Botucatu",
 ) -> Dict[str, pd.DataFrame]:
@@ -383,16 +551,17 @@ def run_cnpj_botucatu_etl(
     Executa download + agregação. Retorna dict com chaves:
     resumo, mei_mensal, porte_pct, cnae_x_tipo, empresas_detalhe (amostra opcional vazia)
     """
+    resolved_url = (base_url or "").strip() or resolve_cnpj_base_url()
     t0 = time.time()
     WORK_DIR.mkdir(parents=True, exist_ok=True)
-    log(f"Início ETL CNPJ — município {municipio_ibge} — base {base_url}")
+    log(f"Início ETL CNPJ — município {municipio_ibge} — base {resolved_url}")
 
-    codigos_municipio = fetch_codigos_municipio_botucatu(WORK_DIR, base_url)
+    codigos_municipio = fetch_codigos_municipio_botucatu(WORK_DIR, resolved_url)
 
     estab_parts: List[pd.DataFrame] = []
     usecols_est: Optional[List[int]] = None
     for i in range(10):
-        url = f"{base_url.rstrip('/')}/Estabelecimentos{i}.zip"
+        url = f"{resolved_url.rstrip('/')}/Estabelecimentos{i}.zip"
         zpath = WORK_DIR / f"Estabelecimentos{i}.zip"
         log(f"Baixando Estabelecimentos{i}.zip …")
         download_zip(url, zpath)
@@ -436,7 +605,7 @@ def run_cnpj_botucatu_etl(
                 [
                     {
                         "ref_data_extracao": pd.Timestamp.utcnow().strftime("%Y-%m-%d"),
-                        "fonte_url": base_url,
+                        "fonte_url": resolved_url,
                         "municipio_ibge": municipio_ibge,
                         "municipio_nome": municipio_nome,
                         "total_empresas": 0,
@@ -460,18 +629,19 @@ def run_cnpj_botucatu_etl(
     bases: Set[str] = set(rep["cnpj_basico"].tolist())
     digits_needed = {b[-1] for b in bases if len(b) == 8}
 
-    emp = load_empresas_for_bases(WORK_DIR, base_url, bases, digits_needed)
-    sim = load_simples_for_bases(WORK_DIR, base_url, bases)
+    emp = load_empresas_for_bases(WORK_DIR, resolved_url, bases, digits_needed)
+    sim = load_simples_for_bases(WORK_DIR, resolved_url, bases)
 
     merged = rep.merge(emp, on="cnpj_basico", how="left").merge(sim, on="cnpj_basico", how="left")
     merged["opcao_mei"] = merged["opcao_mei"].fillna("N").astype(str).str.strip().str.upper()
+    _mei_sim = merged["opcao_mei"].isin(["S", "SIM", "1", "Y", "YES"])
     merged["data_opcao_mei"] = parse_rf_date(merged["data_opcao_mei"])
     merged["data_exclusao_mei"] = parse_rf_date(merged["data_exclusao_mei"])
     merged["situacao_cadastral"] = merged["situacao_cadastral"].fillna("").astype(str).str.strip()
     merged["cnae_subclasse"] = merged["cnae_fiscal_principal"].map(norm_cnae_subclasse)
 
     # MEI vigente no Simples (sem data de exclusão)
-    merged["mei_simples_vigente"] = merged["opcao_mei"].eq("S") & merged["data_exclusao_mei"].isna()
+    merged["mei_simples_vigente"] = _mei_sim & merged["data_exclusao_mei"].isna()
     merged["mei_ativo"] = merged["mei_simples_vigente"] & merged["situacao_cadastral"].eq("2")
     merged["mei_inativo_cnpj"] = merged["mei_simples_vigente"] & ~merged["situacao_cadastral"].eq("2")
 
@@ -486,11 +656,11 @@ def run_cnpj_botucatu_etl(
     mei_inativos = int(merged["mei_inativo_cnpj"].sum())
     mei_opcao_sem_exclusao = int(merged["mei_simples_vigente"].sum())
 
-    # Movimento mensal MEI (datas do Simples)
-    opt = merged.loc[merged["data_opcao_mei"].notna(), "data_opcao_mei"]
-    excl = merged.loc[merged["data_exclusao_mei"].notna(), "data_exclusao_mei"]
-    opt_cnt = opt.dt.to_period("M").value_counts().sort_index()
-    excl_cnt = excl.dt.to_period("M").value_counts().sort_index()
+    # Movimento mensal MEI (datas do Simples) — garantir datetime antes de .dt
+    opt_dt = pd.to_datetime(merged["data_opcao_mei"], errors="coerce")
+    excl_dt = pd.to_datetime(merged["data_exclusao_mei"], errors="coerce")
+    opt_cnt = opt_dt[opt_dt.notna()].dt.to_period("M").value_counts().sort_index()
+    excl_cnt = excl_dt[excl_dt.notna()].dt.to_period("M").value_counts().sort_index()
     all_months = sorted(set(opt_cnt.index.tolist()) | set(excl_cnt.index.tolist()))
     mei_mensal = pd.DataFrame(
         {
@@ -547,7 +717,7 @@ def run_cnpj_botucatu_etl(
         [
             {
                 "ref_data_extracao": pd.Timestamp.utcnow().strftime("%Y-%m-%d"),
-                "fonte_url": base_url,
+                "fonte_url": resolved_url,
                 "municipio_ibge": municipio_ibge,
                 "municipio_nome": municipio_nome,
                 "total_empresas": total_empresas,

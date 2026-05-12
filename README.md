@@ -86,26 +86,26 @@ Esse pipeline único executa em sequência:
      - `investimentos_botucatu_2026.csv`
 
 4. **Cadastro CNPJ / MEI (opcional)** — módulo `cnpj_botucatu_etl.py`, acionado **somente** se existir a variável de ambiente `PIPELINE_INCLUDE_CNPJ=1`:
-   - baixa os ZIPs públicos `Estabelecimentos0..9`, `Empresas*` e `Simples` (URL padrão: release espelho no GitHub; ~vários GB);
+   - baixa os ZIPs públicos `Estabelecimentos0..9`, `Empresas*` e `Simples` da **Receita Federal** (`https://dadosabertos.rfb.gov.br/CNPJ/dados_abertos_cnpj/AAAA-MM/`, competência padrão = mês civil atual menos 2, ou `CNPJ_DADOS_ABERTOS_REF` / `CNPJ_BASE_URL`); ~vários GB;
+   - lê `Simples` com **cabeçalho** (layout novo do portal) ou posicional (espelhos legados);
    - filtra estabelecimentos com município IBGE **3507506** (Botucatu);
    - cruza `Empresas` (porte) e `Simples` (MEI, datas de opção/exclusão);
    - gera `cnpj_botucatu_resumo.csv`, `cnpj_botucatu_mei_mensal.csv`, `cnpj_botucatu_porte_pct.csv`, `cnpj_botucatu_cnae_x_tipo.csv` na raiz do projeto;
    - o job agendado do GitHub **não** inclui essa etapa por padrão (tempo e disco). Rode localmente ou em `workflow_dispatch` com a variável configurada no ambiente do runner, se desejar versionar esses CSVs.
+
+```bash
+set PIPELINE_INCLUDE_CNPJ=1
+set CNPJ_DADOS_ABERTOS_REF=2026-03
+python pipeline_botucatu.py
+```
+
+(Linux/macOS: `export …`. Opcional: `CNPJ_BASE_URL` com URL completa da pasta dos ZIPs, se usar CDN/espelho.)
 
 ### Rodar pipeline mestre
 
 ```bash
 python pipeline_botucatu.py
 ```
-
-Com CNPJ/MEI (máquina com espaço em disco e boa rede):
-
-```bash
-set PIPELINE_INCLUDE_CNPJ=1
-python pipeline_botucatu.py
-```
-
-(Linux/macOS: `export PIPELINE_INCLUDE_CNPJ=1`. Opcional: `CNPJ_BASE_URL` apontando para outra pasta de snapshot da Receita ou espelho.)
 
 **Retomar o CAGED após interrupção:** o pipeline refaz o período inteiro por padrão. Para não baixar de novo desde `2024-01`, defina o primeiro mês a processar, por exemplo:
 
