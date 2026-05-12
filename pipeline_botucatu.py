@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import time
+import urllib.error
 import urllib.request
 import unicodedata
 from datetime import date
@@ -15,8 +16,9 @@ import requests
 
 BASE_DIR = Path(__file__).resolve().parent
 WORK_DIR = BASE_DIR / "tmp_pipeline_botucatu"
-START_YEAR = 2024
-START_MONTH = 1
+# Sobrescreva para retomar após interrupção (ex.: PIPELINE_CAGED_START_YEAR=2025 PIPELINE_CAGED_START_MONTH=4)
+START_YEAR = int(os.environ.get("PIPELINE_CAGED_START_YEAR", "2024"))
+START_MONTH = int(os.environ.get("PIPELINE_CAGED_START_MONTH", "1"))
 CURRENT_DATE = date.today()
 YEAR = str(CURRENT_DATE.year)
 FINANCIAL_YEARS = ["2025", "2026"]
@@ -149,100 +151,163 @@ def resolve_caged_columns(raw_file: Path, delimiter: str) -> Tuple[Dict[str, str
     }, [col_municipio, col_secao, col_subclasse, col_saldo]
 
 
-def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    month_txt = f"{month:02d}"
-    year_txt = str(year)
-    month_url = (
-        f"ftp://ftp.mtps.gov.br/pdet/microdados/NOVO%20CAGED/{year_txt}/{year_txt}{month_txt}/"
-        f"CAGEDMOV{year_txt}{month_txt}.7z"
-    )
-    archive_path = WORK_DIR / f"CAGEDMOV{year_txt}{month_txt}.7z"
-    extract_dir = WORK_DIR / f"extract_{year_txt}_{month_txt}"
-
-    log(f"Iniciando CAGED mês {year_txt}-{month_txt}: download do FTP.")
-    download_file(month_url, archive_path)
-    log(f"Download concluído: {archive_path.name}")
-
-    extracted_files = extract_7z(archive_path, extract_dir)
-    txt_files = [p for p in extracted_files if p.suffix.lower() in (".txt", ".csv")]
-    if not txt_files:
-        raise RuntimeError(f"Nenhum TXT/CSV extraído do arquivo {archive_path.name}")
-
-    raw_file = txt_files[0]
-    delimiter = detect_delimiter(raw_file)
-    log(f"Processando arquivo {raw_file.name} com delimitador '{delimiter}' em chunks de 100.000 linhas.")
-
-    col_map, usecols = resolve_caged_columns(raw_file, delimiter)
-    frames = []
-    frames_comp = []
-
-    for idx, chunk in enumerate(
-        pd.read_csv(
-            raw_file,
-            sep=delimiter,
-            encoding="utf-8",
-            chunksize=100_000,
-            usecols=usecols,
-            low_memory=False,
-        ),
-        start=1,
-    ):
-        chunk[col_map["municipio"]] = pd.to_numeric(chunk[col_map["municipio"]], errors="coerce").fillna(0).astype(int)
-        filtered = chunk[chunk[col_map["municipio"]] == BOTUCATU_MUNICIPIO_CAGED].copy()
-        if filtered.empty:
-            if idx % 10 == 0:
-                    log(f"Mês {year_txt}-{month_txt}: chunk {idx} processado (sem linhas de Botucatu).")
-            continue
-
-        filtered["ano_referencia"] = int(year)
-        filtered["mes_referencia"] = int(month)
-        filtered["saldomovimentacao"] = pd.to_numeric(filtered[col_map["saldo"]], errors="coerce").fillna(0).astype(int)
-        filtered["admissao"] = (filtered["saldomovimentacao"] == 1).astype(int)
-        filtered["demissao"] = (filtered["saldomovimentacao"] == -1).astype(int)
-
-        month_df = pd.DataFrame(
-            {
-                "ano_referencia": filtered["ano_referencia"],
-                "mes_referencia": filtered["mes_referencia"],
-                "secao": filtered[col_map["secao"]].astype(str).str.strip(),
-                "subclasse": filtered[col_map["subclasse"]].astype(str).str.strip(),
-                "saldomovimentacao": filtered["saldomovimentacao"],
-                "admissao": filtered["admissao"],
-                "demissao": filtered["demissao"],
-            }
-        )
-        frames.append(month_df)
-
-        filtered_comp = chunk[chunk[col_map["municipio"]].isin(MUNICIPIOS_COMPARATIVO_CAGED.keys())].copy()
-        if not filtered_comp.empty:
-            filtered_comp["ano_referencia"] = int(year)
-            filtered_comp["mes_referencia"] = int(month)
-            filtered_comp["saldomovimentacao"] = (
-                pd.to_numeric(filtered_comp[col_map["saldo"]], errors="coerce").fillna(0).astype(int)
-            )
-            comp_df = pd.DataFrame(
-                {
-                    "ano_referencia": filtered_comp["ano_referencia"],
-                    "mes_referencia": filtered_comp["mes_referencia"],
-                    "municipio_codigo": filtered_comp[col_map["municipio"]].astype(int),
-                    "Saldo": filtered_comp["saldomovimentacao"],
-                }
-            )
-            frames_comp.append(comp_df)
-
-        if idx % 10 == 0:
-            log(f"Mês {year_txt}-{month_txt}: chunk {idx} processado, linhas acumuladas: {sum(len(f) for f in frames)}")
-
-    # Limpeza obrigatória do disco após cada mês
+def _cleanup_caged_extract(archive_path: Path, raw_file: Path | None, extract_dir: Path) -> None:
     try:
         if archive_path.exists():
             archive_path.unlink()
-        if raw_file.exists():
+        if raw_file is not None and raw_file.exists():
             raw_file.unlink()
         if extract_dir.exists():
             shutil.rmtree(extract_dir, ignore_errors=True)
     except Exception as cleanup_exc:
-        log(f"Aviso de limpeza mês {year_txt}-{month_txt}: {cleanup_exc}")
+        log(f"Aviso de limpeza CAGED ({archive_path.name}): {cleanup_exc}")
+
+
+def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Consolida MOV + FOR + EXC da **mesma** competência (mesma pasta FTP / mesmo snapshot).
+
+    Regra para não inflar totais:
+    - Baixar todos os .7z disponíveis da pasta `.../NOVO CAGED/AAAA/AAAAMM/` na mesma execução.
+    - Cada linha é contada **uma vez**; o saldo oficial é a soma de `saldomovimentacao` sobre a união
+      das linhas (MOV ∪ FOR ∪ EXC). O MTPE organiza os arquivos para que não se some o mesmo
+      movimento duas vezes entre arquivos da **mesma** publicação.
+    - Não misturar MOV de um mês de download com FOR de outro: isso sim geraria duplicidade.
+    """
+    month_txt = f"{month:02d}"
+    year_txt = str(year)
+    base_url = f"ftp://ftp.mtps.gov.br/pdet/microdados/NOVO%20CAGED/{year_txt}/{year_txt}{month_txt}/"
+
+    # (prefixo arquivo, obrigatório)
+    fontes: List[Tuple[str, bool]] = [
+        ("CAGEDMOV", True),
+        ("CAGEDFOR", False),
+        ("CAGEDEXC", False),
+    ]
+
+    frames: List[pd.DataFrame] = []
+    frames_comp: List[pd.DataFrame] = []
+    col_map: Optional[Dict[str, str]] = None
+    delimiter: Optional[str] = None
+    usecols: Optional[List[str]] = None
+
+    log(
+        f"Iniciando CAGED competência {year_txt}-{month_txt}: "
+        "MOV (obrigatório) + FOR/EXC quando existirem, sempre do mesmo diretório FTP."
+    )
+
+    for prefix, obrigatorio in fontes:
+        fname = f"{prefix}{year_txt}{month_txt}.7z"
+        archive_path = WORK_DIR / fname
+        extract_dir = WORK_DIR / f"extract_{year_txt}_{month_txt}_{prefix}"
+        url = base_url + fname
+        try:
+            log(f"Baixando {fname} …")
+            download_file(url, archive_path)
+        except (RuntimeError, urllib.error.URLError, OSError) as exc:
+            if obrigatorio:
+                raise
+            log(f"Arquivo opcional {fname} não disponível (pulando): {exc}")
+            continue
+
+        log(f"Download concluído: {archive_path.name}")
+        extracted_files = extract_7z(archive_path, extract_dir)
+        txt_files = [p for p in extracted_files if p.suffix.lower() in (".txt", ".csv")]
+        if not txt_files:
+            _cleanup_caged_extract(archive_path, None, extract_dir)
+            if obrigatorio:
+                raise RuntimeError(f"Nenhum TXT/CSV extraído de {fname}")
+            log(f"Nenhum TXT/CSV em {fname}; pulando.")
+            continue
+
+        raw_file = txt_files[0]
+        delim = detect_delimiter(raw_file)
+        if col_map is None:
+            delimiter = delim
+            col_map, usecols = resolve_caged_columns(raw_file, delimiter)
+            log(
+                f"Layout CAGED ({prefix}): delimitador '{delimiter}', "
+                f"processando em chunks de 100.000 linhas — arquivo {raw_file.name}."
+            )
+        else:
+            if delim != delimiter:
+                log(f"Aviso: delimitador diferente em {fname} ({delim} vs {delimiter}); usando o de {fname}.")
+                delimiter = delim
+            col_map2, usecols2 = resolve_caged_columns(raw_file, delimiter)
+            if usecols2 != usecols or col_map2 != col_map:
+                log(
+                    f"Aviso: colunas divergentes em {fname} em relação ao MOV; "
+                    "revalidando colunas a partir deste arquivo."
+                )
+                col_map, usecols = col_map2, usecols2
+
+        assert col_map is not None and delimiter is not None and usecols is not None
+
+        for idx, chunk in enumerate(
+            pd.read_csv(
+                raw_file,
+                sep=delimiter,
+                encoding="utf-8",
+                chunksize=100_000,
+                usecols=usecols,
+                low_memory=False,
+            ),
+            start=1,
+        ):
+            chunk[col_map["municipio"]] = pd.to_numeric(chunk[col_map["municipio"]], errors="coerce").fillna(0).astype(
+                int
+            )
+            filtered = chunk[chunk[col_map["municipio"]] == BOTUCATU_MUNICIPIO_CAGED].copy()
+            if filtered.empty:
+                if idx % 10 == 0:
+                    log(f"{prefix} {year_txt}-{month_txt}: chunk {idx} (sem linhas de Botucatu).")
+                continue
+
+            filtered["ano_referencia"] = int(year)
+            filtered["mes_referencia"] = int(month)
+            filtered["saldomovimentacao"] = pd.to_numeric(filtered[col_map["saldo"]], errors="coerce").fillna(
+                0
+            ).astype(int)
+            filtered["admissao"] = (filtered["saldomovimentacao"] == 1).astype(int)
+            filtered["demissao"] = (filtered["saldomovimentacao"] == -1).astype(int)
+
+            month_df = pd.DataFrame(
+                {
+                    "ano_referencia": filtered["ano_referencia"],
+                    "mes_referencia": filtered["mes_referencia"],
+                    "secao": filtered[col_map["secao"]].astype(str).str.strip(),
+                    "subclasse": filtered[col_map["subclasse"]].astype(str).str.strip(),
+                    "saldomovimentacao": filtered["saldomovimentacao"],
+                    "admissao": filtered["admissao"],
+                    "demissao": filtered["demissao"],
+                }
+            )
+            frames.append(month_df)
+
+            filtered_comp = chunk[chunk[col_map["municipio"]].isin(MUNICIPIOS_COMPARATIVO_CAGED.keys())].copy()
+            if not filtered_comp.empty:
+                filtered_comp["ano_referencia"] = int(year)
+                filtered_comp["mes_referencia"] = int(month)
+                filtered_comp["saldomovimentacao"] = (
+                    pd.to_numeric(filtered_comp[col_map["saldo"]], errors="coerce").fillna(0).astype(int)
+                )
+                comp_df = pd.DataFrame(
+                    {
+                        "ano_referencia": filtered_comp["ano_referencia"],
+                        "mes_referencia": filtered_comp["mes_referencia"],
+                        "municipio_codigo": filtered_comp[col_map["municipio"]].astype(int),
+                        "Saldo": filtered_comp["saldomovimentacao"],
+                    }
+                )
+                frames_comp.append(comp_df)
+
+            if idx % 10 == 0:
+                log(
+                    f"{prefix} {year_txt}-{month_txt}: chunk {idx}, "
+                    f"linhas Botucatu acumuladas: {sum(len(f) for f in frames)}"
+                )
+
+        _cleanup_caged_extract(archive_path, raw_file, extract_dir)
 
     if not frames:
         return (

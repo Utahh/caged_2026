@@ -17,3 +17,8 @@ env/
 Thumbs.db
 .vscode/
 .idea/
+
+# Pipeline temporários / probes locais
+tmp_pipeline_botucatu/
+tmp_cnpj_botucatu/
+tmp_*.zip

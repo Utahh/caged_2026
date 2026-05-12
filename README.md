@@ -66,13 +66,12 @@ Arquivo: `pipeline_botucatu.py`
 
 Esse pipeline único executa em sequência:
 
-1. **CAGED (FTP)**:
-   - baixa meses `01`, `02`, `03` de 2026;
-   - descompacta `.7z` com `py7zr`;
-   - lê em chunks de `100000` linhas;
-   - filtra apenas município `350750` (Botucatu);
-   - cria `mes_referencia`, `admissao` e `demissao`;
-   - remove `.7z` e `.txt` após cada mês.
+1. **CAGED (FTP — Novo CAGED)**:
+   - para cada competência `AAAA/MM`, baixa **na mesma execução** os arquivos disponíveis: `CAGEDMOV…7z` (obrigatório), `CAGEDFOR…7z` e `CAGEDEXC…7z` quando existirem na mesma pasta do FTP;
+   - **Não soma** MOV de um download antigo com FOR de outro: tudo vem do **mesmo snapshot** da pasta `NOVO CAGED/AAAA/AAAAMM/`, evitando duplicar movimentos (o inflado “2 e −2” aparece quando se misturam versões ou se conta duas vezes o mesmo evento fora do modelo da RFB);
+   - agrega **uma linha = um registro**; `saldomovimentacao` é somado sobre a união MOV ∪ FOR ∪ EXC; `admissao`/`demissao` derivam de `saldo == 1` / `saldo == -1`;
+   - descompacta `.7z` com `py7zr`, lê em chunks de `100000` linhas, filtra município `350750` (Botucatu) e códigos do comparativo;
+   - remove `.7z` e `.txt` após processar cada arquivo.
 
 2. **Siconfi (API)**:
    - consulta endpoint `msc_patrimonial`;
@@ -107,6 +106,16 @@ python pipeline_botucatu.py
 ```
 
 (Linux/macOS: `export PIPELINE_INCLUDE_CNPJ=1`. Opcional: `CNPJ_BASE_URL` apontando para outra pasta de snapshot da Receita ou espelho.)
+
+**Retomar o CAGED após interrupção:** o pipeline refaz o período inteiro por padrão. Para não baixar de novo desde `2024-01`, defina o primeiro mês a processar, por exemplo:
+
+```powershell
+$env:PIPELINE_CAGED_START_YEAR="2025"
+$env:PIPELINE_CAGED_START_MONTH="6"
+python pipeline_botucatu.py
+```
+
+Use o último mês que apareceu como concluído no log (`CAGED mês YYYY-MM …`) e comece no **mês seguinte**.
 
 ## Funcionalidades do MVP
 
