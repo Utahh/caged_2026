@@ -117,7 +117,11 @@ python pipeline_botucatu.py
 
 Use o último mês que apareceu como concluído no log (`CAGED mês YYYY-MM …`) e comece no **mês seguinte**.
 
-**Competência da movimentação (igual ao Novo CAGED):** admissões/desligamentos/saldo são agregados pelo **ano/mês do evento** (`competencia` AAAAMM no microdado, ou par ano/mês de movimento quando existir). Declarações FOR que retificam meses antigos entram nos totais **daquele** mês, não no mês da pasta FTP.
+**Última competência no FTP (padrão):** antes de processar, o pipeline consulta o FTP e retrocede mês a mês até achar o último `CAGEDMOV*.7z` publicado; assim não se pede mês ainda inexistente (evita 550) e cada execução acompanha o **histórico vivo** do Ministério. Desligar a varredura: `PIPELINE_CAGED_FTP_DISCOVER=0` (volta a usar só o **lag**). Profundidade máxima da busca: `PIPELINE_CAGED_FTP_MAX_BACKTRACK` (padrão 48). Se a varredura falhar (rede/FTP), usa-se o limite por lag (`PIPELINE_CAGED_FTP_LAG_MONTHS`, padrão 2). Teto manual: `PIPELINE_CAGED_END_YEAR` e `PIPELINE_CAGED_END_MONTH`.
+
+**Competência da movimentação (Novo CAGED):** após baixar MOV, FOR e EXC da **mesma** pasta, o pipeline unifica o modo de período (`competenciamov` / `competencia` AAAAMM, ou ano/mês de movimento) **só se essa coluna existir em todos os arquivos** daquele mês; assim retificações FOR tendem a ir para o **mês do evento**. Se faltar coluna em algum arquivo, usa-se o mês da pasta como fallback (conferir layout oficial). Cada nova execução rebaixa o FTP e **regrava** os CSVs — não são séries estáticas.
+
+**Deduplicação de movimentos:** se o mesmo identificador existir com o **mesmo nome de coluna** em MOV, FOR e EXC, linhas repetidas são removidas antes do agregado, mantendo a declaração mais recente (pasta FTP mais nova e prioridade EXC > FOR > MOV). Desativar: `PIPELINE_CAGED_DEDUPE_ID=0`.
 
 **Limpar CSVs antes de uma carga cheia:** `PIPELINE_CLEAN_OUTPUTS=1` remove os arquivos de saída na raiz antes de gerar os novos (não há banco SQL — os CSV são o “armazém”).
 
