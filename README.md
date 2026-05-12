@@ -90,7 +90,7 @@ Esse pipeline único executa em sequência:
    - lê `Simples` com **cabeçalho** (layout novo do portal) ou posicional (espelhos legados);
    - filtra estabelecimentos com município IBGE **3507506** (Botucatu);
    - cruza `Empresas` (porte) e `Simples` (MEI, datas de opção/exclusão);
-   - gera `cnpj_botucatu_resumo.csv`, `cnpj_botucatu_mei_mensal.csv`, `cnpj_botucatu_porte_pct.csv`, `cnpj_botucatu_cnae_x_tipo.csv` na raiz do projeto;
+   - gera na raiz do projeto: `cnpj_botucatu_resumo.csv`, `cnpj_botucatu_mei_mensal.csv`, `cnpj_botucatu_porte_pct.csv`, `cnpj_botucatu_cnae_x_tipo.csv`, além do **join por empresa** (`cnpj_botucatu_join_empresas.csv`), **somente MEI** (`cnpj_botucatu_meis.csv`) e **rastreio do filtro de município** (`cnpj_botucatu_municipio_fonte.csv`);
    - o job agendado do GitHub **não** inclui essa etapa por padrão (tempo e disco). Rode localmente ou em `workflow_dispatch` com a variável configurada no ambiente do runner, se desejar versionar esses CSVs.
 
 ```bash
@@ -146,7 +146,9 @@ Use o último mês que apareceu como concluído no log (`CAGED mês YYYY-MM …`
   - Card com valor total mais recente de `Saldo_em_Reais` formatado em R$.
 
 - **Cadastro CNPJ e MEI (quando os CSVs existirem na raiz ou em `data/`)**
+  - Abas: visão geral municipal (gráficos e totais), base **JOIN** (uma linha por empresa: Estabelecimentos + Empresas + Simples) e aba **somente MEI**.
   - Totais de empresas (raiz), estabelecimentos no município, MEI ativos/inativos e opção no Simples.
+  - Expander com texto e tabela sobre como o **município** entra no filtro (`Municipios.zip` + coluna `municipio` dos estabelecimentos).
   - Gráfico de barras com opções e exclusões MEI por mês (datas do `Simples`).
   - Distribuição percentual por tipo (MEI, EPP, ME, etc.).
   - CNAE (divisão) por tipo de empresa, com filtro e exportação CSV.

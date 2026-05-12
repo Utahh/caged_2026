@@ -8,9 +8,14 @@ Uso típico (local ou runner com disco/rede):
   set PIPELINE_INCLUDE_CNPJ=1
   python pipeline_botucatu.py
 
-Fonte padrão: portal oficial de dados abertos da RFB (pasta mensal `.../AAAA-MM/`).
-Sobrescreva com `CNPJ_BASE_URL` (URL completa da pasta, com barra final) ou ajuste só o mês com
-`CNPJ_DADOS_ABERTOS_REF` (ex.: `2026-03`). Espelhos (GitHub, etc.) são opcionais via `CNPJ_BASE_URL`.
+Fonte padrão: `https://dadosabertos.rfb.gov.br/CNPJ/dados_abertos_cnpj/{AAAA-MM}/`.
+
+Join principal (microdados públicos): **Estabelecimentos\*.zip** (endereço e município no cadastro) +
+**Empresas\*.zip** (porte) + **Simples.zip** (MEI). **Municipios.zip** é lido só para mapear o código de
+município interno da RFB ao alvo IBGE (Botucatu).
+
+Sobrescreva a pasta com `CNPJ_BASE_URL` (barra final) ou `CNPJ_DADOS_ABERTOS_REF` (ex.: `2026-03`).
+Espelhos: `CNPJ_MIRROR_BASE_URL` + `CNPJ_TRY_MIRROR_FALLBACK`.
 """
 
 from __future__ import annotations
@@ -520,6 +525,135 @@ def porte_label(code: object) -> str:
     return mapping.get(s, f"Porte código {s}")
 
 
+JOIN_EMPRESAS_CSV_COLUMNS = [
+    "municipio_ibge",
+    "municipio_nome",
+    "cnpj_basico",
+    "cnpj",
+    "identificador_matriz_filial",
+    "situacao_cadastral",
+    "situacao_cadastral_descricao",
+    "data_inicio_atividade",
+    "cnae_fiscal_principal",
+    "cnae_subclasse",
+    "divisao_cnae",
+    "divisao_descricao",
+    "uf",
+    "municipio_codigo_rfb_estabelecimento",
+    "qtd_estabelecimentos_municipio",
+    "porte_empresa",
+    "porte_cadastral_descricao",
+    "opcao_mei",
+    "data_opcao_mei",
+    "data_exclusao_mei",
+    "mei_simples_vigente",
+    "mei_ativo",
+    "mei_inativo_cnpj",
+    "tipo_empresa",
+]
+
+
+def municipio_fonte_dataframe(
+    municipio_ibge: str,
+    municipio_nome: str,
+    codigos_filtro: Set[str],
+    base_url: str,
+) -> pd.DataFrame:
+    """Explica como o município entra no pipeline (Municipios.zip + coluna Estabelecimentos)."""
+    return pd.DataFrame(
+        [
+            {
+                "campo": "URL base (pasta AAAA-MM)",
+                "valor": base_url.rstrip("/"),
+            },
+            {
+                "campo": "Município alvo (IBGE 7 dígitos)",
+                "valor": municipio_ibge,
+            },
+            {
+                "campo": "Nome de referência",
+                "valor": municipio_nome,
+            },
+            {
+                "campo": "Códigos usados no filtro da coluna municipio (Estabelecimentos)",
+                "valor": ", ".join(sorted(codigos_filtro)),
+            },
+            {
+                "campo": "Papel de Municipios.zip",
+                "valor": (
+                    "Arquivo oficial da RFB com códigos de município do cadastro CNPJ; "
+                    "localizamos a linha do nome e usamos o código interno para casar com a coluna "
+                    "`municipio` dos estabelecimentos (nem sempre é o IBGE de 7 dígitos)."
+                ),
+            },
+            {
+                "campo": "Join por empresa (raiz)",
+                "valor": (
+                    "Agrupamos estabelecimentos no município, escolhemos um representante por "
+                    "`cnpj_basico` (prioriza matriz), cruzamos Empresas (porte) e Simples (MEI) pela mesma chave."
+                ),
+            },
+        ]
+    )
+
+
+def _mei_opcao_sim_series(opcao: pd.Series) -> pd.Series:
+    s = opcao.fillna("N").astype(str).str.strip().str.upper()
+    return s.isin(["S", "SIM", "1", "Y", "YES"])
+
+
+def build_join_empresas_export(
+    merged: pd.DataFrame,
+    estab_all: pd.DataFrame,
+    cref: pd.DataFrame,
+    municipio_ibge: str,
+    municipio_nome: str,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Uma linha por cnpj_basico: join Estabelecimentos (rep.) + Empresas + Simples + CNAE divisão.
+    Retorna (todas as empresas do município, subset com opção pelo MEI no Simples).
+    """
+    estab_counts = (
+        estab_all.groupby("cnpj_basico", as_index=False)
+        .size()
+        .rename(columns={"size": "qtd_estabelecimentos_municipio"})
+    )
+    jb = merged.merge(estab_counts, on="cnpj_basico", how="left")
+    if not cref.empty:
+        jb = jb.merge(cref, left_on="cnae_subclasse", right_on="subclasse", how="left").drop(
+            columns=["subclasse"], errors="ignore"
+        )
+    else:
+        jb = jb.copy()
+        jb["divisao_cnae"] = ""
+        jb["divisao_descricao"] = ""
+
+    jb["municipio_ibge"] = municipio_ibge
+    jb["municipio_nome"] = municipio_nome
+    ord_ = jb["cnpj_ordem"].astype(str).str.strip().str.replace(r"\D", "", regex=True).str.zfill(4)
+    dv = jb["cnpj_dv"].astype(str).str.strip().str.replace(r"\D", "", regex=True).str.zfill(2)
+    jb["cnpj"] = jb["cnpj_basico"].astype(str).str.strip() + ord_ + dv
+    jb["situacao_cadastral_descricao"] = jb["situacao_cadastral"].map(situacao_label)
+    jb["porte_cadastral_descricao"] = jb["porte_empresa"].map(porte_label)
+
+    di = pd.to_datetime(jb["data_inicio_atividade"], format="%Y%m%d", errors="coerce")
+    jb["data_inicio_atividade"] = di.dt.strftime("%Y-%m-%d").fillna(jb["data_inicio_atividade"].astype(str))
+
+    jb["data_opcao_mei"] = pd.to_datetime(jb["data_opcao_mei"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+    jb["data_exclusao_mei"] = pd.to_datetime(jb["data_exclusao_mei"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+
+    jb["mei_simples_vigente"] = jb["mei_simples_vigente"].map(lambda x: "1" if x else "0")
+    jb["mei_ativo"] = jb["mei_ativo"].map(lambda x: "1" if x else "0")
+    jb["mei_inativo_cnpj"] = jb["mei_inativo_cnpj"].map(lambda x: "1" if x else "0")
+
+    jb2 = jb.rename(columns={"municipio": "municipio_codigo_rfb_estabelecimento"})
+    cols = [c for c in JOIN_EMPRESAS_CSV_COLUMNS if c in jb2.columns]
+    out = jb2[cols].copy()
+    mei_mask = _mei_opcao_sim_series(jb["opcao_mei"])
+    meis = out.loc[mei_mask].copy()
+    return out, meis
+
+
 def situacao_label(code: object) -> str:
     s = str(code).strip() if code is not None else ""
     if s == "2":
@@ -656,7 +790,7 @@ def _run_cnpj_botucatu_etl_at(
 
     if not estab_parts:
         log("Nenhum estabelecimento encontrado para o município — abortando agregações.")
-        empty = pd.DataFrame()
+        empty_join = pd.DataFrame(columns=JOIN_EMPRESAS_CSV_COLUMNS)
         return {
             "resumo": pd.DataFrame(
                 [
@@ -677,6 +811,11 @@ def _run_cnpj_botucatu_etl_at(
             "porte_pct": pd.DataFrame(columns=["tipo_empresa", "quantidade", "percentual"]),
             "cnae_x_tipo": pd.DataFrame(
                 columns=["tipo_empresa", "divisao_cnae", "divisao_descricao", "quantidade", "percentual_no_tipo"]
+            ),
+            "join_empresas": empty_join,
+            "meis": empty_join,
+            "municipio_fonte": municipio_fonte_dataframe(
+                municipio_ibge, municipio_nome, codigos_municipio, resolved_url
             ),
         }
 
@@ -770,6 +909,13 @@ def _run_cnpj_botucatu_etl_at(
         rows_cnae.append(sub)
     cnae_x_tipo = pd.concat(rows_cnae, ignore_index=True) if rows_cnae else pd.DataFrame()
 
+    join_empresas, meis = build_join_empresas_export(merged, estab_all, cref, municipio_ibge, municipio_nome)
+    municipio_fonte = municipio_fonte_dataframe(municipio_ibge, municipio_nome, codigos_municipio, resolved_url)
+    log(
+        f"Join export: {len(join_empresas)} empresas (raiz), {len(meis)} com opção pelo MEI no Simples; "
+        "CSV: cnpj_botucatu_join_empresas.csv, cnpj_botucatu_meis.csv, cnpj_botucatu_municipio_fonte.csv"
+    )
+
     resumo = pd.DataFrame(
         [
             {
@@ -794,6 +940,9 @@ def _run_cnpj_botucatu_etl_at(
         "mei_mensal": mei_mensal,
         "porte_pct": porte_pct,
         "cnae_x_tipo": cnae_x_tipo,
+        "join_empresas": join_empresas,
+        "meis": meis,
+        "municipio_fonte": municipio_fonte,
     }
 
 
@@ -803,6 +952,14 @@ def export_cnpj_csvs(dfs: Dict[str, pd.DataFrame], out_dir: Optional[Path] = Non
     dfs["mei_mensal"].to_csv(out / "cnpj_botucatu_mei_mensal.csv", sep=";", index=False, encoding="utf-8-sig")
     dfs["porte_pct"].to_csv(out / "cnpj_botucatu_porte_pct.csv", sep=";", index=False, encoding="utf-8-sig")
     dfs["cnae_x_tipo"].to_csv(out / "cnpj_botucatu_cnae_x_tipo.csv", sep=";", index=False, encoding="utf-8-sig")
+    if "join_empresas" in dfs:
+        dfs["join_empresas"].to_csv(out / "cnpj_botucatu_join_empresas.csv", sep=";", index=False, encoding="utf-8-sig")
+    if "meis" in dfs:
+        dfs["meis"].to_csv(out / "cnpj_botucatu_meis.csv", sep=";", index=False, encoding="utf-8-sig")
+    if "municipio_fonte" in dfs:
+        dfs["municipio_fonte"].to_csv(
+            out / "cnpj_botucatu_municipio_fonte.csv", sep=";", index=False, encoding="utf-8-sig"
+        )
     log(f"CSV exportados em {out}")
 
 

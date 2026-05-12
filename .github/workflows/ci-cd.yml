@@ -63,7 +63,8 @@ jobs:
       - name: Commit refreshed CSVs (if changed)
         run: |
           git add caged_botucatu_q1_2026.csv caged_comparativo_municipios.csv financas_botucatu_2026.csv estban_botucatu_2025_2026.csv relatorio_botucatu_q1_2026.csv investimentos_botucatu_2026.csv
-          for f in cnpj_botucatu_resumo.csv cnpj_botucatu_mei_mensal.csv cnpj_botucatu_porte_pct.csv cnpj_botucatu_cnae_x_tipo.csv; do
+          for f in cnpj_botucatu_resumo.csv cnpj_botucatu_mei_mensal.csv cnpj_botucatu_porte_pct.csv cnpj_botucatu_cnae_x_tipo.csv \
+            cnpj_botucatu_join_empresas.csv cnpj_botucatu_meis.csv cnpj_botucatu_municipio_fonte.csv; do
             if [ -f "$f" ]; then git add "$f"; fi
           done
           if git diff --staged --quiet; then
@@ -92,7 +93,8 @@ jobs:
           if [ -f caged_comparativo_municipios.csv ]; then cp caged_comparativo_municipios.csv dist/; fi
           if [ -f investimentos_botucatu_2026.csv ]; then cp investimentos_botucatu_2026.csv dist/; fi
           if [ -f estban_botucatu_2025_2026.csv ]; then cp estban_botucatu_2025_2026.csv dist/; fi
-          for f in cnpj_botucatu_resumo.csv cnpj_botucatu_mei_mensal.csv cnpj_botucatu_porte_pct.csv cnpj_botucatu_cnae_x_tipo.csv; do
+          for f in cnpj_botucatu_resumo.csv cnpj_botucatu_mei_mensal.csv cnpj_botucatu_porte_pct.csv cnpj_botucatu_cnae_x_tipo.csv \
+            cnpj_botucatu_join_empresas.csv cnpj_botucatu_meis.csv cnpj_botucatu_municipio_fonte.csv; do
             if [ -f "$f" ]; then cp "$f" dist/; fi
           done
           tar -czf observatorio-botucatu.tar.gz dist

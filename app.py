@@ -534,7 +534,7 @@ def load_data() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
 
 
 @st.cache_data
-def load_cnpj_botucatu() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+def load_cnpj_botucatu() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     root = Path(__file__).resolve().parent
     data_dir = root / "data"
     resumo_p = path_exist(
@@ -543,11 +543,17 @@ def load_cnpj_botucatu() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.D
     mei_p = path_exist([root / "cnpj_botucatu_mei_mensal.csv", data_dir / "cnpj_botucatu_mei_mensal.csv"])
     porte_p = path_exist([root / "cnpj_botucatu_porte_pct.csv", data_dir / "cnpj_botucatu_porte_pct.csv"])
     cnae_p = path_exist([root / "cnpj_botucatu_cnae_x_tipo.csv", data_dir / "cnpj_botucatu_cnae_x_tipo.csv"])
+    join_p = path_exist([root / "cnpj_botucatu_join_empresas.csv", data_dir / "cnpj_botucatu_join_empresas.csv"])
+    meis_p = path_exist([root / "cnpj_botucatu_meis.csv", data_dir / "cnpj_botucatu_meis.csv"])
+    muni_p = path_exist([root / "cnpj_botucatu_municipio_fonte.csv", data_dir / "cnpj_botucatu_municipio_fonte.csv"])
     resumo = pl.read_csv(resumo_p, separator=";") if resumo_p else pl.DataFrame()
     mei = pl.read_csv(mei_p, separator=";") if mei_p else pl.DataFrame()
     porte = pl.read_csv(porte_p, separator=";") if porte_p else pl.DataFrame()
     cnae = pl.read_csv(cnae_p, separator=";") if cnae_p else pl.DataFrame()
-    return resumo, mei, porte, cnae
+    join_df = pl.read_csv(join_p, separator=";") if join_p else pl.DataFrame()
+    meis = pl.read_csv(meis_p, separator=";") if meis_p else pl.DataFrame()
+    muni = pl.read_csv(muni_p, separator=";") if muni_p else pl.DataFrame()
+    return resumo, mei, porte, cnae, join_df, meis, muni
 
 
 def normalize_caged(df: pl.DataFrame) -> pl.DataFrame:
@@ -640,7 +646,7 @@ def normalize_fin(df: pl.DataFrame) -> pl.DataFrame:
 
 
 caged_raw, fin_raw, caged_comp_raw = load_data()
-cnpj_resumo_raw, cnpj_mei_raw, cnpj_porte_raw, cnpj_cnae_raw = load_cnpj_botucatu()
+cnpj_resumo_raw, cnpj_mei_raw, cnpj_porte_raw, cnpj_cnae_raw, cnpj_join_raw, cnpj_meis_raw, cnpj_muni_fonte_raw = load_cnpj_botucatu()
 has_cnpj_export = not cnpj_resumo_raw.is_empty()
 if caged_raw.is_empty() and fin_raw.is_empty() and caged_comp_raw.is_empty() and not has_cnpj_export:
     st.warning("⚠️ Nenhum dataset encontrado (CAGED, finanças, comparativo ou CNPJ/MEI). Verifique os CSV na raiz ou em `data/`.")
@@ -844,27 +850,33 @@ if not caged.is_empty():
                 ]
             ).alias("Mês")
         )
+        comp_12m = comp_12m.sort(["ord_mes", "Municipio"])
         comp_pd = comp_12m.to_pandas()
         if not comp_pd.empty:
             comp_pd["Saldo_BR"] = comp_pd["Saldo"].apply(lambda v: br_int(float(v)))
+            tick_vals = sorted(comp_pd["ord_mes"].unique())
+            ord_to_lbl = comp_pd.drop_duplicates(subset=["ord_mes"]).set_index("ord_mes")["Mês"].to_dict()
+            tick_lbl = [str(ord_to_lbl.get(int(ov), ov)) for ov in tick_vals]
             fig_comp = px.line(
                 comp_pd,
-                x="Mês",
+                x="ord_mes",
                 y="Saldo",
                 color="Municipio",
                 markers=True,
+                text="Saldo_BR",
                 title="Evolução de Saldo por Município (12 meses)",
+                labels={"ord_mes": "Mês", "Saldo": "Saldo"},
             )
-            fig_comp.update_traces(
-                hovertemplate="%{x}<br>%{customdata}<extra>%{fullData.name}</extra>",
-                customdata=comp_pd["Saldo_BR"],
-                text=comp_pd["Saldo_BR"],
-                mode="lines+markers+text",
-                textposition="top center",
-                textfont=dict(size=9),
-                cliponaxis=False,
+            fig_comp.update_traces(textposition="top center", textfont=dict(size=9), cliponaxis=False)
+            fig_comp.update_layout(
+                xaxis=dict(
+                    tickmode="array",
+                    tickvals=tick_vals,
+                    ticktext=tick_lbl,
+                    title="Mês",
+                )
             )
-            fig_comp.update_xaxes(nticks=6)
+            fig_comp.update_xaxes(nticks=min(12, len(tick_vals)))
             aplicar_layout_clean(fig_comp, unified_hover=True)
             plotly_mobile_friendly(fig_comp, key="pl_caged_comp")
             st.download_button(
@@ -984,18 +996,13 @@ if has_cnpj_export:
     st.caption(
         "Empresas com ao menos um estabelecimento no município (IBGE 3507506). "
         "MEI: opção pelo Simples sem data de exclusão; ativo/inativo conforme situação cadastral do estabelecimento representativo (matriz no município, se houver). "
-        "Fonte: dados abertos da Receita Federal (pasta mensal no portal; a URL exata usada na extração aparece abaixo em `fonte_url`)."
+        "Fonte: dados abertos da Receita Federal em `https://dadosabertos.rfb.gov.br/CNPJ/dados_abertos_cnpj/{{AAAA-MM}}/` "
+        "(Estabelecimentos + Empresas + Simples; `Municipios.zip` só para o código interno do município no filtro)."
     )
     rs = cnpj_resumo_raw.to_dicts()[0]
     fu = str(rs.get("fonte_url", "") or "")
     fu_disp = (fu[:80] + "…") if len(fu) > 80 else fu
     st.caption(f"Referência da base: **{rs.get('ref_data_extracao', '')}** · Arquivo-fonte: `{fu_disp}`")
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Empresas (raiz CNPJ)", br_int(float(rs.get("total_empresas", 0) or 0)))
-    m2.metric("Estabelecimentos no município", br_int(float(rs.get("total_estabelecimentos", 0) or 0)))
-    m3.metric("MEI ativos", br_int(float(rs.get("mei_ativos", 0) or 0)))
-    m4.metric("MEI inativos (CNPJ)", br_int(float(rs.get("mei_inativos_cnpj", 0) or 0)))
-    m5.metric("MEI no Simples (sem exclusão)", br_int(float(rs.get("mei_opcao_sem_exclusao", 0) or 0)))
 
     tot_e = float(rs.get("total_empresas", 0) or 0)
     mei_any = float(rs.get("mei_opcao_sem_exclusao", 0) or 0)
@@ -1006,105 +1013,182 @@ if has_cnpj_export:
             "Ajuste a competência e rode de novo o pipeline com `PIPELINE_INCLUDE_CNPJ=1`."
         )
 
-    with st.expander("Glossário rápido"):
-        st.markdown(
-            """
+    tab_vis, tab_join, tab_mei = st.tabs(
+        ["Visão geral (município)", "Base JOIN (por empresa)", "Somente MEI"]
+    )
+
+    with tab_vis:
+        with st.expander("Como o município alimenta o filtro"):
+            st.markdown(
+                "O **município** usado na extração vem da coluna `municipio` dos arquivos **Estabelecimentos*.zip**. "
+                "Esse valor costuma ser o **código interno da RFB** (tabela **Municipios.zip**), não sempre o IBGE de 7 dígitos. "
+                "Buscamos *Botucatu* em `Municipios.zip` e montamos o conjunto de códigos aceitos no filtro."
+            )
+            if not cnpj_muni_fonte_raw.is_empty():
+                st.dataframe(cnpj_muni_fonte_raw, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "Baixar CSV — rastreio município / join",
+                    data=csv_bytes_from_pandas(cnpj_muni_fonte_raw.to_pandas()),
+                    file_name="cnpj_botucatu_municipio_fonte.csv",
+                    mime="text/csv",
+                    key="dl_cnpj_muni_fonte",
+                    use_container_width=True,
+                )
+            else:
+                st.info("Arquivo `cnpj_botucatu_municipio_fonte.csv` não encontrado (rode o ETL CNPJ atualizado).")
+
+        with st.expander("Glossário rápido"):
+            st.markdown(
+                """
 - **Empresa (raiz)**: um CNPJ básico (8 dígitos) pode ter vários estabelecimentos; contamos uma vez se qualquer unidade estiver em Botucatu.
 - **Estabelecimentos**: unidades locais (matriz/filial) com endereço no município.
 - **MEI ativo**: opção pelo MEI vigente (`Simples`) **e** situação cadastral **ativa** no estabelecimento usado como referência.
 - **MEI inativos (CNPJ)**: ainda com opção MEI no Simples, mas situação cadastral diferente de ativa (ex.: baixada/suspensa).
 - **Aberturas / exclusões MEI (mensal)**: datas de opção e de exclusão do MEI no `Simples` (não confundir com abertura de empresa no município).
 """
-        )
-
-    if not cnpj_mei_raw.is_empty():
-        st.markdown("### Movimento MEI (opção e exclusão no Simples)")
-        mei_pd = cnpj_mei_raw.to_pandas()
-        mei_pd = mei_pd.tail(36)
-        fig_mei = go.Figure()
-        fig_mei.add_trace(
-            go.Bar(x=mei_pd["ano_mes"], y=mei_pd["aberturas_mei"], name="Opção pelo MEI", marker_color="#2563eb")
-        )
-        fig_mei.add_trace(
-            go.Bar(x=mei_pd["ano_mes"], y=mei_pd["exclusoes_mei"], name="Exclusão do MEI", marker_color="#94a3b8")
-        )
-        fig_mei.update_layout(barmode="group", title="Mensal — últimos períodos com registro")
-        aplicar_layout_clean(fig_mei)
-        plotly_mobile_friendly(fig_mei, key="pl_cnpj_mei_mensal")
-        st.download_button(
-            "Baixar CSV — movimento MEI mensal",
-            data=csv_bytes_from_pandas(mei_pd),
-            file_name="cnpj_botucatu_mei_mensal.csv",
-            mime="text/csv",
-            key="dl_cnpj_mei",
-            use_container_width=True,
-        )
-    else:
-        st.info("Sem série mensal de MEI (arquivo vazio ou não gerado).")
-
-    if not cnpj_porte_raw.is_empty():
-        st.markdown("### Participação por tipo (porte / MEI)")
-        st.caption("Percentual sobre o total de empresas (raiz) com estabelecimento em Botucatu.")
-        pp = cnpj_porte_raw.to_pandas()
-        pp["pct_label"] = pp["percentual"].map(lambda x: f"{float(x):.1f}%".replace(".", ","))
-        fig_pie = px.bar(
-            pp.sort_values("quantidade", ascending=True),
-            x="quantidade",
-            y="tipo_empresa",
-            orientation="h",
-            text="pct_label",
-            title="Quantidade e % do total municipal",
-        )
-        fig_pie.update_traces(textposition="outside")
-        aplicar_layout_clean(fig_pie)
-        plotly_mobile_friendly(fig_pie, key="pl_cnpj_porte")
-        st.download_button(
-            "Baixar CSV — distribuição por tipo",
-            data=csv_bytes_from_pandas(pp.drop(columns=["pct_label"], errors="ignore")),
-            file_name="cnpj_botucatu_porte_pct.csv",
-            mime="text/csv",
-            key="dl_cnpj_porte",
-            use_container_width=True,
-        )
-
-    if not cnpj_cnae_raw.is_empty():
-        st.markdown("### CNAE (divisão) por tipo de empresa")
-        st.caption("Para cada tipo (MEI, EPP, etc.), mostramos onde a massa se concentra na classificação CNAE 2.0 (divisão).")
-        tipos = sorted(cnpj_cnae_raw["tipo_empresa"].unique().to_list())
-        tipo_sel = st.selectbox("Tipo de empresa", tipos, index=0, key="cnpj_tipo_cnae")
-        sub = cnpj_cnae_raw.filter(pl.col("tipo_empresa") == tipo_sel).head(15)
-        if not sub.is_empty():
-            cnae_pd = sub.to_pandas()
-            cnae_pd["pct_txt"] = cnae_pd["percentual_no_tipo"].map(lambda x: f"{float(x):.1f}%".replace(".", ","))
-            fig_c = px.bar(
-                cnae_pd,
-                x="quantidade",
-                y="divisao_descricao",
-                orientation="h",
-                text="pct_txt",
-                title=f"Top divisões — {tipo_sel} (% dentro do tipo)",
-                labels={"divisao_descricao": "Divisão CNAE", "quantidade": "Empresas"},
             )
-            fig_c.update_traces(texttemplate="%{text}", textposition="outside")
-            aplicar_layout_clean(fig_c)
-            plotly_mobile_friendly(fig_c, key="pl_cnpj_cnae")
+
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Empresas (raiz CNPJ)", br_int(float(rs.get("total_empresas", 0) or 0)))
+        m2.metric("Estabelecimentos no município", br_int(float(rs.get("total_estabelecimentos", 0) or 0)))
+        m3.metric("MEI ativos", br_int(float(rs.get("mei_ativos", 0) or 0)))
+        m4.metric("MEI inativos (CNPJ)", br_int(float(rs.get("mei_inativos_cnpj", 0) or 0)))
+        m5.metric("MEI no Simples (sem exclusão)", br_int(float(rs.get("mei_opcao_sem_exclusao", 0) or 0)))
+
+        if not cnpj_mei_raw.is_empty():
+            st.markdown("### Movimento MEI (opção e exclusão no Simples)")
+            mei_pd = cnpj_mei_raw.to_pandas()
+            mei_pd = mei_pd.tail(36)
+            fig_mei = go.Figure()
+            fig_mei.add_trace(
+                go.Bar(x=mei_pd["ano_mes"], y=mei_pd["aberturas_mei"], name="Opção pelo MEI", marker_color="#2563eb")
+            )
+            fig_mei.add_trace(
+                go.Bar(x=mei_pd["ano_mes"], y=mei_pd["exclusoes_mei"], name="Exclusão do MEI", marker_color="#94a3b8")
+            )
+            fig_mei.update_layout(barmode="group", title="Mensal — últimos períodos com registro")
+            aplicar_layout_clean(fig_mei)
+            plotly_mobile_friendly(fig_mei, key="pl_cnpj_mei_mensal")
+            st.download_button(
+                "Baixar CSV — movimento MEI mensal",
+                data=csv_bytes_from_pandas(mei_pd),
+                file_name="cnpj_botucatu_mei_mensal.csv",
+                mime="text/csv",
+                key="dl_cnpj_mei",
+                use_container_width=True,
+            )
+        else:
+            st.info("Sem série mensal de MEI (arquivo vazio ou não gerado).")
+
+        if not cnpj_porte_raw.is_empty():
+            st.markdown("### Participação por tipo (porte / MEI)")
+            st.caption("Percentual sobre o total de empresas (raiz) com estabelecimento em Botucatu.")
+            pp = cnpj_porte_raw.to_pandas()
+            pp["pct_label"] = pp["percentual"].map(lambda x: f"{float(x):.1f}%".replace(".", ","))
+            fig_pie = px.bar(
+                pp.sort_values("quantidade", ascending=True),
+                x="quantidade",
+                y="tipo_empresa",
+                orientation="h",
+                text="pct_label",
+                title="Quantidade e % do total municipal",
+            )
+            fig_pie.update_traces(textposition="outside")
+            aplicar_layout_clean(fig_pie)
+            plotly_mobile_friendly(fig_pie, key="pl_cnpj_porte")
+            st.download_button(
+                "Baixar CSV — distribuição por tipo",
+                data=csv_bytes_from_pandas(pp.drop(columns=["pct_label"], errors="ignore")),
+                file_name="cnpj_botucatu_porte_pct.csv",
+                mime="text/csv",
+                key="dl_cnpj_porte",
+                use_container_width=True,
+            )
+
+        if not cnpj_cnae_raw.is_empty():
+            st.markdown("### CNAE (divisão) por tipo de empresa")
+            st.caption(
+                "Para cada tipo (MEI, EPP, etc.), mostramos onde a massa se concentra na classificação CNAE 2.0 (divisão)."
+            )
+            tipos = sorted(cnpj_cnae_raw["tipo_empresa"].unique().to_list())
+            tipo_sel = st.selectbox("Tipo de empresa", tipos, index=0, key="cnpj_tipo_cnae")
+            sub = cnpj_cnae_raw.filter(pl.col("tipo_empresa") == tipo_sel).head(15)
+            if not sub.is_empty():
+                cnae_pd = sub.to_pandas()
+                cnae_pd["pct_txt"] = cnae_pd["percentual_no_tipo"].map(lambda x: f"{float(x):.1f}%".replace(".", ","))
+                fig_c = px.bar(
+                    cnae_pd,
+                    x="quantidade",
+                    y="divisao_descricao",
+                    orientation="h",
+                    text="pct_txt",
+                    title=f"Top divisões — {tipo_sel} (% dentro do tipo)",
+                    labels={"divisao_descricao": "Divisão CNAE", "quantidade": "Empresas"},
+                )
+                fig_c.update_traces(texttemplate="%{text}", textposition="outside")
+                aplicar_layout_clean(fig_c)
+                plotly_mobile_friendly(fig_c, key="pl_cnpj_cnae")
+            st.download_button(
+                "Baixar CSV — CNAE × tipo (completo)",
+                data=csv_bytes_from_pandas(cnpj_cnae_raw.to_pandas()),
+                file_name="cnpj_botucatu_cnae_x_tipo.csv",
+                mime="text/csv",
+                key="dl_cnpj_cnae",
+                use_container_width=True,
+            )
+
         st.download_button(
-            "Baixar CSV — CNAE × tipo (completo)",
-            data=csv_bytes_from_pandas(cnpj_cnae_raw.to_pandas()),
-            file_name="cnpj_botucatu_cnae_x_tipo.csv",
+            "Baixar CSV — resumo CNPJ/MEI (metadados + totais)",
+            data=csv_bytes_from_pandas(cnpj_resumo_raw.to_pandas()),
+            file_name="cnpj_botucatu_resumo.csv",
             mime="text/csv",
-            key="dl_cnpj_cnae",
+            key="dl_cnpj_resumo",
             use_container_width=True,
         )
 
-    st.download_button(
-        "Baixar CSV — resumo CNPJ/MEI (metadados + totais)",
-        data=csv_bytes_from_pandas(cnpj_resumo_raw.to_pandas()),
-        file_name="cnpj_botucatu_resumo.csv",
-        mime="text/csv",
-        key="dl_cnpj_resumo",
-        use_container_width=True,
-    )
+    with tab_join:
+        st.markdown("### Join Estabelecimentos + Empresas + Simples (uma linha por empresa)")
+        st.caption(
+            "Representante: estabelecimento no município escolhido por `cnpj_basico` (prioriza matriz). "
+            "Inclui porte, CNAE, situação cadastral, quantidade de estabelecimentos no município e flags MEI."
+        )
+        if not cnpj_join_raw.is_empty():
+            njoin = cnpj_join_raw.height
+            prev_n = min(2000, njoin)
+            st.caption(f"Pré-visualização: **{prev_n}** de **{njoin}** linhas (o CSV completo está no botão de download).")
+            st.dataframe(cnpj_join_raw.head(prev_n), use_container_width=True, height=420)
+            st.download_button(
+                "Baixar CSV — join por empresa (`cnpj_botucatu_join_empresas.csv`)",
+                data=csv_bytes_from_pandas(cnpj_join_raw.to_pandas()),
+                file_name="cnpj_botucatu_join_empresas.csv",
+                mime="text/csv",
+                key="dl_cnpj_join",
+                use_container_width=True,
+            )
+        else:
+            st.info("Sem arquivo de join (`cnpj_botucatu_join_empresas.csv`). Rode o ETL CNPJ atualizado com `PIPELINE_INCLUDE_CNPJ=1`.")
+
+    with tab_mei:
+        st.markdown("### Somente empresas com opção pelo MEI no Simples")
+        st.caption(
+            "Filtradas por `opcao_mei` (S, SIM, 1, etc.) no arquivo **Simples.zip**; podem constar exclusões já datadas."
+        )
+        if not cnpj_meis_raw.is_empty():
+            nm = cnpj_meis_raw.height
+            pm = min(2000, nm)
+            st.caption(f"Pré-visualização: **{pm}** de **{nm}** linhas.")
+            st.dataframe(cnpj_meis_raw.head(pm), use_container_width=True, height=420)
+            st.download_button(
+                "Baixar CSV — somente MEI (`cnpj_botucatu_meis.csv`)",
+                data=csv_bytes_from_pandas(cnpj_meis_raw.to_pandas()),
+                file_name="cnpj_botucatu_meis.csv",
+                mime="text/csv",
+                key="dl_cnpj_meis_tab",
+                use_container_width=True,
+            )
+        else:
+            st.info("Sem linhas MEI no export ou arquivo ausente (`cnpj_botucatu_meis.csv`).")
+
 
 st.divider()
 st.header("Caixa, aplicações e poupança")
