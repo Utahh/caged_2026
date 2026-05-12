@@ -1,0 +1,9 @@
+﻿chave;valor
+municipio_api_id;3407506
+municipio_nome;Botucatu - SP (Comex Stat)
+ibge_referencia;3507506
+comex_ultima_atualizacao;2026-04
+ranking_sh4_ano;2025
+ptax_serie;BCB SGS 1 (dólar venda, média mensal)
+nota_empresa;O MDIC não divulga exportação/importação por CNPJ ou razão social nos dados abertos (sigilo fiscal). O ranking disponível é por posição SH4 (produto).
+metodologia_brl;"Valor em R$ = US$ FOB × média mensal PTAX (venda). Aproximação contábil; contratos podem usar taxas e incoterm diferentes."

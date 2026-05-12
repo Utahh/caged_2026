@@ -58,6 +58,18 @@ def log(msg: str) -> None:
     print(f"[PIPELINE] {msg}", flush=True)
 
 
+def normalize_municipio_caged_series(series: pd.Series) -> pd.Series:
+    """
+    Alinha o código de município do Novo CAGED ao formato de 6 dígitos usado nos recortes do projeto.
+
+    O IBGE divulga código de 7 dígitos (inclui dígito verificador). Em muitos arquivos do CAGED o campo
+    já vem com 6 posições; quando vem com 7, o sétimo dígito é removido (divisão inteira por 10) para
+    casar com `BOTUCATU_MUNICIPIO_CAGED` e `MUNICIPIOS_COMPARATIVO_CAGED`.
+    """
+    m = pd.to_numeric(series, errors="coerce").fillna(0).astype("int64")
+    return m.where(m < 1_000_000, m // 10).astype("int64")
+
+
 def retry_exec(func, attempts: int = 3, sleep_seconds: int = 3, context: str = ""):
     last_error = None
     for i in range(1, attempts + 1):
@@ -459,7 +471,10 @@ def dedupe_caged_micro_rows_before_agg(df: pd.DataFrame) -> pd.DataFrame:
         return _strip_caged_dedup_aux_columns(df)
     n0 = len(df)
     sort_cols = ["ano_referencia", "mes_referencia", "__ftp_decl_y", "__ftp_decl_m", "__caged_src_rank"]
-    d1 = df[has_id].sort_values(sort_cols, kind="mergesort").drop_duplicates(subset=["__caged_mov_id"], keep="last")
+    dedupe_subset = ["__caged_mov_id"]
+    if "municipio_codigo" in df.columns:
+        dedupe_subset = ["__caged_mov_id", "municipio_codigo"]
+    d1 = df[has_id].sort_values(sort_cols, kind="mergesort").drop_duplicates(subset=dedupe_subset, keep="last")
     d2 = df[~has_id]
     out = pd.concat([d1, d2], ignore_index=True)
     if len(out) < n0:
@@ -625,9 +640,7 @@ def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFra
             ),
             start=1,
         ):
-            chunk[col_map["municipio"]] = pd.to_numeric(chunk[col_map["municipio"]], errors="coerce").fillna(0).astype(
-                int
-            )
+            chunk[col_map["municipio"]] = normalize_municipio_caged_series(chunk[col_map["municipio"]])
             filtered = chunk[chunk[col_map["municipio"]] == BOTUCATU_MUNICIPIO_CAGED].copy()
             if filtered.empty:
                 if idx % 10 == 0:
@@ -1023,6 +1036,13 @@ def main() -> None:
             finally:
                 cleanup_cnpj_workdir()
                 log("Limpeza do diretório temporário CNPJ concluída.")
+        if os.environ.get("PIPELINE_INCLUDE_COMEX") == "1":
+            from comexstat_botucatu_etl import export_comex_csvs
+
+            log(
+                "PIPELINE_INCLUDE_COMEX=1 — ETL Comex Stat + PTAX (vários minutos; API MDIC pode limitar taxa de requisições)."
+            )
+            export_comex_csvs(BASE_DIR)
         elapsed = time.time() - start
         log(f"Pipeline finalizado com sucesso em {elapsed:.1f}s.")
     finally:

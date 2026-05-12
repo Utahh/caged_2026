@@ -103,6 +103,18 @@ python pipeline_botucatu.py
 
 Se `dadosabertos.rfb.gov.br` não responder, defina um espelho com a **mesma árvore de arquivos** (`Municipios.zip`, `Estabelecimentos*.zip`, etc.): `CNPJ_MIRROR_BASE_URL=https://…/pasta/` e mantenha `CNPJ_TRY_MIRROR_FALLBACK=1` (padrão). Sem `CNPJ_MIRROR_BASE_URL`, só o portal oficial é tentado (com retentativas de download).
 
+5. **Comex Stat / balança comercial (opcional)** — módulo `comexstat_botucatu_etl.py`, acionado no pipeline com **`PIPELINE_INCLUDE_COMEX=1`** (ou rode `python comexstat_botucatu_etl.py` direto):
+   - consulta a API do MDIC (`api-comexstat.mdic.gov.br`) para **totais mensais** de exportação/importação do município no Comex (código interno do município na API, padrão **3407506** para Botucatu-SP — ajuste com `COMEX_CITY_ID` se necessário);
+   - cruza com **PTAX** (BCB SGS 1) para coluna estimada em R$;
+   - gera `comex_botucatu_mensal.csv`, `comex_botucatu_top_sh4_export.csv`, `comex_botucatu_top_sh4_import.csv`, `comex_botucatu_meta.csv`;
+   - **não existe ranking público por empresa/CNPJ** (sigilo); o painel do app usa **top 10 por produto (SH4)** como proxy oficial.
+   - variáveis úteis: `COMEX_MONTHS_BACK`, `COMEX_RANKING_YEAR`, `COMEX_REQUEST_PAUSE_SEC` (pausa entre POSTs; padrão 12s ajuda a evitar **HTTP 429**).
+
+```powershell
+$env:PIPELINE_INCLUDE_COMEX="1"
+python pipeline_botucatu.py
+```
+
 ### Rodar pipeline mestre
 
 ```bash
