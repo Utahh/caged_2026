@@ -117,6 +117,10 @@ python pipeline_botucatu.py
 
 Use o último mês que apareceu como concluído no log (`CAGED mês YYYY-MM …`) e comece no **mês seguinte**.
 
+**Competência da movimentação (igual ao Novo CAGED):** admissões/desligamentos/saldo são agregados pelo **ano/mês do evento** (`competencia` AAAAMM no microdado, ou par ano/mês de movimento quando existir). Declarações FOR que retificam meses antigos entram nos totais **daquele** mês, não no mês da pasta FTP.
+
+**Limpar CSVs antes de uma carga cheia:** `PIPELINE_CLEAN_OUTPUTS=1` remove os arquivos de saída na raiz antes de gerar os novos (não há banco SQL — os CSV são o “armazém”).
+
 ## Funcionalidades do MVP
 
 - **CAGED (Março/2026 vs Fevereiro/2026)**

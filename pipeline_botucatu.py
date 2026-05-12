@@ -126,7 +126,13 @@ def extract_7z(archive_path: Path, output_dir: Path) -> List[Path]:
     return [output_dir / n for n in names]
 
 
-def resolve_caged_columns(raw_file: Path, delimiter: str) -> Tuple[Dict[str, str], List[str]]:
+def resolve_caged_columns(raw_file: Path, delimiter: str) -> Tuple[Dict[str, str], List[str], Dict[str, object]]:
+    """
+    Resolve colunas obrigatórias + período da movimentação (competência do evento).
+
+    O Novo CAGED usa a **competência da movimentação** (mês a que o adm/deslig se refere),
+    não o mês da pasta FTP. FOR/EXC retroativos devem ser agregados nesse ano/mês.
+    """
     header_df = pd.read_csv(raw_file, sep=delimiter, nrows=0, encoding="utf-8", low_memory=False)
     col_map = normalize_col_map(header_df.columns)
 
@@ -143,12 +149,98 @@ def resolve_caged_columns(raw_file: Path, delimiter: str) -> Tuple[Dict[str, str
             f"Colunas detectadas: {list(header_df.columns)}"
         )
 
-    return {
+    col_competencia = first_present(col_map, ["competencia", "competncia"])
+    col_ano_mov = first_present(
+        col_map,
+        [
+            "ano_competencia_movimento",
+            "ano_competencia",
+            "ano_movimento",
+            "ano_movimentacao",
+        ],
+    )
+    col_mes_mov = first_present(
+        col_map,
+        [
+            "mes_competencia_movimento",
+            "mes_competencia",
+            "mes_movimento",
+            "mes_movimentacao",
+        ],
+    )
+
+    period_spec: Dict[str, object]
+    if col_competencia:
+        period_spec = {"mode": "competencia", "col": col_competencia}
+    elif col_ano_mov and col_mes_mov:
+        period_spec = {"mode": "ano_mes", "ano": col_ano_mov, "mes": col_mes_mov}
+    else:
+        period_spec = {"mode": "folder"}
+
+    usecols = [col_municipio, col_secao, col_subclasse, col_saldo]
+    if period_spec["mode"] == "competencia":
+        usecols.append(str(period_spec["col"]))
+    elif period_spec["mode"] == "ano_mes":
+        usecols.append(str(period_spec["ano"]))
+        usecols.append(str(period_spec["mes"]))
+    usecols = list(dict.fromkeys(usecols))
+
+    base_map = {
         "municipio": col_municipio,
         "secao": col_secao,
         "subclasse": col_subclasse,
         "saldo": col_saldo,
-    }, [col_municipio, col_secao, col_subclasse, col_saldo]
+    }
+    return base_map, usecols, period_spec
+
+
+def parse_competencia_aaaamm(series: pd.Series) -> Tuple[pd.Series, pd.Series]:
+    """Interpreta coluna competência como AAAAMM (número ou texto)."""
+    num = pd.to_numeric(series, errors="coerce")
+    ano = (num // 100).astype(float)
+    mes = (num % 100).astype(float)
+    ok = (mes >= 1) & (mes <= 12) & (ano >= 1980) & (ano <= 2100)
+    fix = ~ok & series.notna()
+    if fix.any():
+        digits = series[fix].astype(str).str.replace(r"\D", "", regex=True).str.slice(0, 6)
+        sn = pd.to_numeric(digits, errors="coerce")
+        ano.loc[fix] = (sn // 100).astype(float)
+        mes.loc[fix] = (sn % 100).astype(float)
+    return ano, mes
+
+
+def assign_movimento_period(
+    df: pd.DataFrame,
+    period_spec: Dict[str, object],
+    folder_year: int,
+    folder_month: int,
+) -> None:
+    """Preenche ano_referencia e mes_referencia in-place (competência do evento)."""
+    mode = period_spec.get("mode", "folder")
+    if mode == "competencia":
+        col = str(period_spec["col"])
+        ano, mes = parse_competencia_aaaamm(df[col])
+        df["ano_referencia"] = ano
+        df["mes_referencia"] = mes
+    elif mode == "ano_mes":
+        df["ano_referencia"] = pd.to_numeric(df[str(period_spec["ano"])], errors="coerce")
+        df["mes_referencia"] = pd.to_numeric(df[str(period_spec["mes"])], errors="coerce")
+    else:
+        df["ano_referencia"] = float(folder_year)
+        df["mes_referencia"] = float(folder_month)
+
+    bad = (
+        df["mes_referencia"].isna()
+        | (df["mes_referencia"] < 1)
+        | (df["mes_referencia"] > 12)
+        | df["ano_referencia"].isna()
+    )
+    if bad.any():
+        df.loc[bad, "ano_referencia"] = float(folder_year)
+        df.loc[bad, "mes_referencia"] = float(folder_month)
+
+    df["ano_referencia"] = pd.to_numeric(df["ano_referencia"], errors="coerce").fillna(folder_year).astype(int)
+    df["mes_referencia"] = pd.to_numeric(df["mes_referencia"], errors="coerce").fillna(folder_month).astype(int)
 
 
 def _cleanup_caged_extract(archive_path: Path, raw_file: Path | None, extract_dir: Path) -> None:
@@ -173,6 +265,10 @@ def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFra
       das linhas (MOV ∪ FOR ∪ EXC). O MTPE organiza os arquivos para que não se some o mesmo
       movimento duas vezes entre arquivos da **mesma** publicação.
     - Não misturar MOV de um mês de download com FOR de outro: isso sim geraria duplicidade.
+
+    Competência do **evento** (adm/deslig): usa coluna `competencia` (AAAAMM) ou ano/mês de movimento do layout,
+    quando existirem. Assim, declarações FOR que retificam meses anteriores entram nos totais daquele ano/mês,
+    alinhado à divulgação do Novo CAGED. Se o layout não trouxer essas colunas, cai no mês da pasta FTP.
     """
     month_txt = f"{month:02d}"
     year_txt = str(year)
@@ -188,8 +284,10 @@ def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFra
     frames: List[pd.DataFrame] = []
     frames_comp: List[pd.DataFrame] = []
     col_map: Optional[Dict[str, str]] = None
-    delimiter: Optional[str] = None
+    file_delimiter: Optional[str] = None
     usecols: Optional[List[str]] = None
+    period_spec: Optional[Dict[str, object]] = None
+    logged_period = False
 
     log(
         f"Iniciando CAGED competência {year_txt}-{month_txt}: "
@@ -223,30 +321,48 @@ def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFra
         raw_file = txt_files[0]
         delim = detect_delimiter(raw_file)
         if col_map is None:
-            delimiter = delim
-            col_map, usecols = resolve_caged_columns(raw_file, delimiter)
+            file_delimiter = delim
+            col_map, usecols, period_spec = resolve_caged_columns(raw_file, file_delimiter)
+            ps = period_spec.get("mode", "folder")
+            if ps == "folder":
+                log(
+                    f"Aviso layout CAGED: coluna de competência da movimentação não encontrada; "
+                    f"usando mês da pasta FTP ({year_txt}-{month_txt}) para adm/des/saldo. "
+                    "Confira o Layout Novo CAGED Movimentação se os totais divergirem do portal."
+                )
+            else:
+                log(f"Período da movimentação: modo '{ps}' (colunas conforme layout oficial).")
             log(
-                f"Layout CAGED ({prefix}): delimitador '{delimiter}', "
+                f"Layout CAGED ({prefix}): delimitador '{file_delimiter}', "
                 f"processando em chunks de 100.000 linhas — arquivo {raw_file.name}."
             )
+            logged_period = True
         else:
-            if delim != delimiter:
-                log(f"Aviso: delimitador diferente em {fname} ({delim} vs {delimiter}); usando o de {fname}.")
-                delimiter = delim
-            col_map2, usecols2 = resolve_caged_columns(raw_file, delimiter)
+            if delim != file_delimiter:
+                log(f"Aviso: delimitador diferente em {fname} ({delim} vs {file_delimiter}); usando o de {fname}.")
+                file_delimiter = delim
+            col_map2, usecols2, period_spec2 = resolve_caged_columns(raw_file, file_delimiter)
             if usecols2 != usecols or col_map2 != col_map:
                 log(
                     f"Aviso: colunas divergentes em {fname} em relação ao MOV; "
                     "revalidando colunas a partir deste arquivo."
                 )
-                col_map, usecols = col_map2, usecols2
+                col_map, usecols, period_spec = col_map2, usecols2, period_spec2
+                if not logged_period:
+                    ps = period_spec.get("mode", "folder")
+                    if ps == "folder":
+                        log(
+                            f"Aviso layout CAGED ({fname}): sem competência da movimentação; "
+                            f"fallback pasta FTP {year_txt}-{month_txt}."
+                        )
+                    logged_period = True
 
-        assert col_map is not None and delimiter is not None and usecols is not None
+        assert col_map is not None and file_delimiter is not None and usecols is not None and period_spec is not None
 
         for idx, chunk in enumerate(
             pd.read_csv(
                 raw_file,
-                sep=delimiter,
+                sep=file_delimiter,
                 encoding="utf-8",
                 chunksize=100_000,
                 usecols=usecols,
@@ -263,8 +379,7 @@ def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFra
                     log(f"{prefix} {year_txt}-{month_txt}: chunk {idx} (sem linhas de Botucatu).")
                 continue
 
-            filtered["ano_referencia"] = int(year)
-            filtered["mes_referencia"] = int(month)
+            assign_movimento_period(filtered, period_spec, year, month)
             filtered["saldomovimentacao"] = pd.to_numeric(filtered[col_map["saldo"]], errors="coerce").fillna(
                 0
             ).astype(int)
@@ -286,8 +401,7 @@ def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFra
 
             filtered_comp = chunk[chunk[col_map["municipio"]].isin(MUNICIPIOS_COMPARATIVO_CAGED.keys())].copy()
             if not filtered_comp.empty:
-                filtered_comp["ano_referencia"] = int(year)
-                filtered_comp["mes_referencia"] = int(month)
+                assign_movimento_period(filtered_comp, period_spec, year, month)
                 filtered_comp["saldomovimentacao"] = (
                     pd.to_numeric(filtered_comp[col_map["saldo"]], errors="coerce").fillna(0).astype(int)
                 )
@@ -337,7 +451,11 @@ def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFra
 def run_caged_etl() -> Tuple[pd.DataFrame, pd.DataFrame]:
     log("ETL CAGED iniciado.")
     periods = build_caged_periods(START_YEAR, START_MONTH)
-    log(f"CAGED será processado de {START_YEAR}-{START_MONTH:02d} até {CURRENT_DATE.year}-{CURRENT_DATE.month:02d}.")
+    log(
+        f"CAGED será processado de {START_YEAR}-{START_MONTH:02d} até {CURRENT_DATE.year}-{CURRENT_DATE.month:02d}. "
+        "Cada mês de referência nos relatórios usa a competência da movimentação do layout; "
+        "reprocessar todo o intervalo após novas publicações FTP mantém séries alinhadas ao Novo CAGED."
+    )
     monthly_results = []
     comp_results = []
     for year, month in periods:
@@ -545,6 +663,27 @@ def build_estban_like_dataset(siconfi: pd.DataFrame) -> pd.DataFrame:
     return estban
 
 
+def maybe_clean_pipeline_outputs() -> None:
+    """Remove CSVs gerados pelo pipeline antes de uma nova carga completa (sem 'banco' SQL)."""
+    if os.environ.get("PIPELINE_CLEAN_OUTPUTS") != "1":
+        return
+    outputs = [
+        BASE_DIR / "caged_botucatu_q1_2026.csv",
+        BASE_DIR / "financas_botucatu_2026.csv",
+        BASE_DIR / "estban_botucatu_2025_2026.csv",
+        BASE_DIR / "caged_comparativo_municipios.csv",
+        BASE_DIR / "relatorio_botucatu_q1_2026.csv",
+        BASE_DIR / "investimentos_botucatu_2026.csv",
+    ]
+    for p in outputs:
+        try:
+            if p.exists():
+                p.unlink()
+                log(f"PIPELINE_CLEAN_OUTPUTS=1 — removido {p.name}")
+        except OSError as exc:
+            log(f"Aviso: não foi possível remover {p}: {exc}")
+
+
 def export_outputs(caged: pd.DataFrame, siconfi: pd.DataFrame, caged_comp: pd.DataFrame) -> None:
     out_caged = BASE_DIR / "caged_botucatu_q1_2026.csv"
     out_fin = BASE_DIR / "financas_botucatu_2026.csv"
@@ -583,6 +722,7 @@ def main() -> None:
     start = time.time()
     log("Pipeline Botucatu iniciado.")
     WORK_DIR.mkdir(parents=True, exist_ok=True)
+    maybe_clean_pipeline_outputs()
 
     try:
         caged, caged_comp = run_caged_etl()
