@@ -922,15 +922,15 @@ with nav_painel:
                     xs = sub["ord_mes"].astype(int).tolist()
                     ys = sub["Saldo"].astype(float).tolist()
                     ms = sub["Mês"].astype(str).tolist()
-                    c = palette[i % len(palette)]
+                    trace_color = palette[i % len(palette)]
                     fig_comp.add_trace(
                         go.Scatter(
                             x=xs,
                             y=ys,
                             mode="lines+markers",
                             name=str(mun),
-                            line=dict(width=2.5, color=c),
-                            marker=dict(size=8, color=c, line=dict(width=1, color="rgba(255,255,255,0.6)")),
+                            line=dict(width=2.5, color=trace_color),
+                            marker=dict(size=8, color=trace_color, line=dict(width=1, color="rgba(255,255,255,0.6)")),
                             cliponaxis=False,
                             customdata=ms,
                             hovertemplate="<b>%{fullData.name}</b><br>%{customdata}<br>Saldo: %{y:.0f}<extra></extra>",
