@@ -205,14 +205,37 @@ def parse_rf_date(series: pd.Series) -> pd.Series:
     return series.map(_one)
 
 
-def download_zip(url: str, dest: Path, timeout: int = 300) -> None:
+def download_zip(
+    url: str,
+    dest: Path,
+    timeout_connect: int = 45,
+    timeout_read: int = 900,
+    attempts: int = 5,
+) -> None:
+    """Baixa ZIP com retentativas (portal RFB costuma ser lento ou instável)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with requests.get(url, stream=True, timeout=timeout, headers={"User-Agent": "observatorio-botucatu/1.0"}) as r:
-        r.raise_for_status()
-        with dest.open("wb") as f:
-            for chunk in r.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    f.write(chunk)
+    headers = {"User-Agent": "observatorio-botucatu/1.0 (dados publicos CNPJ receita federal)"}
+    last_exc: Optional[BaseException] = None
+    for attempt in range(1, attempts + 1):
+        try:
+            with requests.get(
+                url,
+                stream=True,
+                timeout=(timeout_connect, timeout_read),
+                headers=headers,
+            ) as r:
+                r.raise_for_status()
+                with dest.open("wb") as f:
+                    for chunk in r.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            f.write(chunk)
+            return
+        except (requests.RequestException, OSError) as exc:
+            last_exc = exc
+            log(f"Download {attempt}/{attempts} falhou ({url[:96]}): {exc}")
+            if attempt < attempts:
+                time.sleep(min(20, 4 * attempt))
+    raise RuntimeError(f"Download após {attempts} tentativas: {url}") from last_exc
 
 
 def first_member_csv(z: zipfile.ZipFile) -> str:
@@ -542,16 +565,50 @@ def norm_cnae_subclasse(v: object) -> str:
     return d.zfill(7) if d else ""
 
 
+def cnpj_download_base_candidates(user_base: Optional[str]) -> List[str]:
+    """
+    Ordem de tentativa: URL explícita (CNPJ_BASE_URL); portal oficial RFB (pasta AAAA-MM);
+    espelho opcional (somente se `CNPJ_MIRROR_BASE_URL` estiver definido e `CNPJ_TRY_MIRROR_FALLBACK` ativo).
+    """
+    if (user_base or "").strip():
+        u = (user_base or "").strip()
+        return [u if u.endswith("/") else u + "/"]
+    out: List[str] = [resolve_cnpj_base_url()]
+    if os.environ.get("CNPJ_TRY_MIRROR_FALLBACK", "1").strip().lower() not in ("0", "false", "no", "off"):
+        m = os.environ.get("CNPJ_MIRROR_BASE_URL", "").strip()
+        if m:
+            out.append(m if m.endswith("/") else m + "/")
+    return out
+
+
 def run_cnpj_botucatu_etl(
     base_url: Optional[str] = None,
     municipio_ibge: str = BOTUCATU_IBGE_7,
     municipio_nome: str = "Botucatu",
 ) -> Dict[str, pd.DataFrame]:
     """
-    Executa download + agregação. Retorna dict com chaves:
-    resumo, mei_mensal, porte_pct, cnae_x_tipo, empresas_detalhe (amostra opcional vazia)
+    Executa download + agregação. Tenta, em sequência, a URL configurada (se houver), o portal oficial
+    da RFB e, se configurado, uma segunda base (`CNPJ_MIRROR_BASE_URL`).
     """
-    resolved_url = (base_url or "").strip() or resolve_cnpj_base_url()
+    last_exc: Optional[BaseException] = None
+    for u in cnpj_download_base_candidates(base_url):
+        try:
+            return _run_cnpj_botucatu_etl_at(u, municipio_ibge, municipio_nome)
+        except Exception as exc:
+            last_exc = exc
+            log(f"Aviso: falha nesta base de arquivos; tentando próxima se houver: {exc}")
+    raise RuntimeError(
+        "CNPJ: nenhuma URL de download funcionou (rede, firewall ou pasta inexistente). "
+        "Defina CNPJ_BASE_URL manualmente ou verifique CNPJ_DADOS_ABERTOS_REF."
+    ) from last_exc
+
+
+def _run_cnpj_botucatu_etl_at(
+    resolved_url: str,
+    municipio_ibge: str = BOTUCATU_IBGE_7,
+    municipio_nome: str = "Botucatu",
+) -> Dict[str, pd.DataFrame]:
+    """Implementação: `resolved_url` já é a pasta base dos ZIPs."""
     t0 = time.time()
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     log(f"Início ETL CNPJ — município {municipio_ibge} — base {resolved_url}")

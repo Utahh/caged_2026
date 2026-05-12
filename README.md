@@ -101,6 +101,8 @@ python pipeline_botucatu.py
 
 (Linux/macOS: `export …`. Opcional: `CNPJ_BASE_URL` com URL completa da pasta dos ZIPs, se usar CDN/espelho.)
 
+Se `dadosabertos.rfb.gov.br` não responder, defina um espelho com a **mesma árvore de arquivos** (`Municipios.zip`, `Estabelecimentos*.zip`, etc.): `CNPJ_MIRROR_BASE_URL=https://…/pasta/` e mantenha `CNPJ_TRY_MIRROR_FALLBACK=1` (padrão). Sem `CNPJ_MIRROR_BASE_URL`, só o portal oficial é tentado (com retentativas de download).
+
 ### Rodar pipeline mestre
 
 ```bash
