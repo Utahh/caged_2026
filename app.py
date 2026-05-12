@@ -354,10 +354,12 @@ PLOTLY_CONFIG: dict = {
 def plotly_mobile_friendly(fig, *, key: str, **kwargs) -> None:
     """Evita que o gráfico roube o scroll vertical no celular; hover continua disponível."""
     extra_cfg = kwargs.pop("config", {})
+    kwargs.pop("use_container_width", None)
+    width = kwargs.pop("width", "stretch")
     st.plotly_chart(
         fig,
         theme="streamlit",
-        use_container_width=True,
+        width=width,
         config={**PLOTLY_CONFIG, **extra_cfg},
         key=key,
         **kwargs,
@@ -747,16 +749,17 @@ with menu_r:
     st.empty()
 
 st.caption(
-    f"Período ativo: **{MESES[month]}/{ano}**. Nos celulares, a página rola com prioridade; "
-    "ferramentas extras do gráfico ficam no menu discreto (canto, ao passar o dedo)."
+    "Popover **Filtros e período**: aplica-se ao **Painel municipal** (CAGED, comparativo e finanças). "
+    "A aba **Balança comercial** usa só a série Comex do CSV; os indicadores do topo usam o **último mês disponível** nessa série."
 )
 st.caption(
-    "Emprego formal (CAGED) e posição de caixa, aplicações e poupança (consolidado municipal, referência Siconfi/ESTBAN)."
+    "Em telas pequenas, a página rola com prioridade; o menu de ferramentas dos gráficos fica discreto (canto, ao passar o dedo)."
 )
 
 nav_painel, nav_comex = st.tabs(["Painel municipal", "Balança comercial (Comex)"])
 
 with nav_painel:
+    st.caption(f"Painel — recorte selecionado: **{MESES[month]}/{ano}**.")
     if not caged.is_empty():
         st.markdown("## Emprego formal (CAGED)")
         st.caption("Admissões, desligamentos, saldo e estoque — com evolução em 12 meses e comparativo entre municípios.")
@@ -861,7 +864,7 @@ with nav_painel:
             file_name="caged_admissoes_desligamentos.csv",
             mime="text/csv",
             key="dl_caged_line",
-            use_container_width=True,
+            width="stretch",
         )
 
         fig_bar = px.bar(monthly_pd, x="Mês Curto", y="Saldo", title="Evolução do Saldo Mensal", text="Saldo_BR")
@@ -880,7 +883,7 @@ with nav_painel:
             file_name="caged_evolucao_saldo.csv",
             mime="text/csv",
             key="dl_caged_bar",
-            use_container_width=True,
+            width="stretch",
         )
 
         if not caged_comp.is_empty():
@@ -957,7 +960,7 @@ with nav_painel:
                     file_name="caged_comparativo_municipios.csv",
                     mime="text/csv",
                     key="dl_caged_comp",
-                    use_container_width=True,
+                    width="stretch",
                 )
             else:
                 st.info("Sem dados suficientes para o comparativo de municípios no período selecionado.")
@@ -1021,7 +1024,7 @@ with nav_painel:
             file_name="caged_saldo_por_atividade.csv",
             mime="text/csv",
             key="dl_caged_hbar",
-            use_container_width=True,
+            width="stretch",
         )
 
         st.markdown(f"### Ranking CNAE — subclasses ({MESES[month]}/{ano})")
@@ -1031,7 +1034,7 @@ with nav_painel:
             st.markdown("### Maiores Saldos")
             st.dataframe(
                 top_maiores.select(["CNAE 2.0 Subclasse", "Saldo", "Admissões", "Desligamentos", "% Impacto"]).to_pandas(),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 height=220,
             )
@@ -1039,7 +1042,7 @@ with nav_painel:
             st.markdown("### Menores Saldos")
             st.dataframe(
                 top_menores.select(["CNAE 2.0 Subclasse", "Saldo", "Admissões", "Desligamentos", "% Impacto"]).to_pandas(),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 height=220,
             )
@@ -1059,7 +1062,7 @@ with nav_painel:
             file_name="caged_ranking_cnae_top5.csv",
             mime="text/csv",
             key="dl_caged_cnae_rank",
-            use_container_width=True,
+            width="stretch",
         )
 
     if has_cnpj_export:
@@ -1097,14 +1100,14 @@ with nav_painel:
                     "Buscamos *Botucatu* em `Municipios.zip` e montamos o conjunto de códigos aceitos no filtro."
                 )
                 if not cnpj_muni_fonte_raw.is_empty():
-                    st.dataframe(cnpj_muni_fonte_raw, use_container_width=True, hide_index=True)
+                    st.dataframe(cnpj_muni_fonte_raw, width="stretch", hide_index=True)
                     st.download_button(
                         "Baixar CSV — rastreio município / join",
                         data=csv_bytes_from_pandas(cnpj_muni_fonte_raw.to_pandas()),
                         file_name="cnpj_botucatu_municipio_fonte.csv",
                         mime="text/csv",
                         key="dl_cnpj_muni_fonte",
-                        use_container_width=True,
+                        width="stretch",
                     )
                 else:
                     st.info("Arquivo `cnpj_botucatu_municipio_fonte.csv` não encontrado (rode o ETL CNPJ atualizado).")
@@ -1147,7 +1150,7 @@ with nav_painel:
                     file_name="cnpj_botucatu_mei_mensal.csv",
                     mime="text/csv",
                     key="dl_cnpj_mei",
-                    use_container_width=True,
+                    width="stretch",
                 )
             else:
                 st.info("Sem série mensal de MEI (arquivo vazio ou não gerado).")
@@ -1174,7 +1177,7 @@ with nav_painel:
                     file_name="cnpj_botucatu_porte_pct.csv",
                     mime="text/csv",
                     key="dl_cnpj_porte",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             if not cnpj_cnae_raw.is_empty():
@@ -1206,7 +1209,7 @@ with nav_painel:
                     file_name="cnpj_botucatu_cnae_x_tipo.csv",
                     mime="text/csv",
                     key="dl_cnpj_cnae",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             st.download_button(
@@ -1215,7 +1218,7 @@ with nav_painel:
                 file_name="cnpj_botucatu_resumo.csv",
                 mime="text/csv",
                 key="dl_cnpj_resumo",
-                use_container_width=True,
+                width="stretch",
             )
 
         with tab_join:
@@ -1228,14 +1231,14 @@ with nav_painel:
                 njoin = cnpj_join_raw.height
                 prev_n = min(2000, njoin)
                 st.caption(f"Pré-visualização: **{prev_n}** de **{njoin}** linhas (o CSV completo está no botão de download).")
-                st.dataframe(cnpj_join_raw.head(prev_n), use_container_width=True, height=420)
+                st.dataframe(cnpj_join_raw.head(prev_n), width="stretch", height=420)
                 st.download_button(
                     "Baixar CSV — join por empresa (`cnpj_botucatu_join_empresas.csv`)",
                     data=csv_bytes_from_pandas(cnpj_join_raw.to_pandas()),
                     file_name="cnpj_botucatu_join_empresas.csv",
                     mime="text/csv",
                     key="dl_cnpj_join",
-                    use_container_width=True,
+                    width="stretch",
                 )
             else:
                 st.info("Sem arquivo de join (`cnpj_botucatu_join_empresas.csv`). Rode o ETL CNPJ atualizado com `PIPELINE_INCLUDE_CNPJ=1`.")
@@ -1316,7 +1319,7 @@ with nav_painel:
                         file_name="financeiro_evolucao_12_meses.csv",
                         mime="text/csv",
                         key="dl_fin_evo",
-                        use_container_width=True,
+                        width="stretch",
                     )
 
             with c2:
@@ -1365,7 +1368,7 @@ with nav_painel:
                         file_name="financeiro_saldo_por_instituicao.csv",
                         mime="text/csv",
                         key="dl_fin_dist",
-                        use_container_width=True,
+                        width="stretch",
                     )
 
             st.caption(
@@ -1377,6 +1380,10 @@ with nav_painel:
 
 with nav_comex:
     st.header("Balança comercial (Comex Stat / MDIC)")
+    st.caption(
+        "Indicadores e gráficos usam a **série mensal do CSV Comex** (não usam Ano/Mês do filtro do Painel). "
+        "KPIs do topo = **último mês publicado** na série."
+    )
     st.caption(
         "Recorte **municipal** (município do declarante), valores **FOB em US$**. "
         "Estimativa em **R$** = US$ × média mensal **PTAX** (BCB SGS 1, dólar venda). "
@@ -1485,6 +1492,42 @@ with nav_comex:
             (pl.col("ano").cast(pl.Utf8) + "-" + pl.col("mes").cast(pl.Utf8).str.zfill(2)).alias("periodo")
         )
         ch_pd = chart_df.to_pandas()
+
+        def _fmt_usd_fob_cell(v: object) -> str:
+            try:
+                x = float(v)
+            except (TypeError, ValueError):
+                return "—"
+            if x != x:
+                return "—"
+            s = f"{x:,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            return f"US$ FOB {s}"
+
+        def _fmt_ptax_cell(v: object) -> str:
+            try:
+                x = float(v)
+            except (TypeError, ValueError):
+                return "—"
+            if x != x:
+                return "—"
+            s = f"{x:.4f}".replace(".", ",")
+            return f"PTAX média R$ {s} / US$"
+
+        def _fmt_brl_cell(v: object) -> str:
+            try:
+                x = float(v)
+            except (TypeError, ValueError):
+                return "—"
+            if x != x:
+                return "—"
+            return format_brl_full(x)
+
+        ch_pd["ht_exp_usd"] = ch_pd["export_usd"].map(_fmt_usd_fob_cell)
+        ch_pd["ht_imp_usd"] = ch_pd["import_usd"].map(_fmt_usd_fob_cell)
+        ch_pd["ht_ptax"] = ch_pd["ptax"].map(_fmt_ptax_cell)
+        ch_pd["ht_exp_brl"] = ch_pd["export_brl"].map(_fmt_brl_cell)
+        ch_pd["ht_imp_brl"] = ch_pd["import_brl"].map(_fmt_brl_cell)
+
         fig_comex = go.Figure()
         fig_comex.add_trace(
             go.Scatter(
@@ -1492,7 +1535,10 @@ with nav_comex:
                 y=ch_pd["export_usd"],
                 name="Exportação (US$)",
                 mode="lines+markers",
-                line=dict(width=2),
+                line=dict(width=2.2, color="#2563eb"),
+                marker=dict(size=7, color="#2563eb"),
+                text=ch_pd["ht_exp_usd"],
+                hovertemplate="<b>%{fullData.name}</b><br>%{x}<br>%{text}<extra></extra>",
             )
         )
         fig_comex.add_trace(
@@ -1501,7 +1547,10 @@ with nav_comex:
                 y=ch_pd["import_usd"],
                 name="Importação (US$)",
                 mode="lines+markers",
-                line=dict(width=2),
+                line=dict(width=2.2, color="#ea580c"),
+                marker=dict(size=7, color="#ea580c"),
+                text=ch_pd["ht_imp_usd"],
+                hovertemplate="<b>%{fullData.name}</b><br>%{x}<br>%{text}<extra></extra>",
             )
         )
         fig_comex.add_trace(
@@ -1510,8 +1559,10 @@ with nav_comex:
                 y=ch_pd["ptax"],
                 name="PTAX (R$/US$)",
                 mode="lines",
-                line=dict(width=1.5, dash="dot"),
+                line=dict(width=2, dash="dot", color="#64748b"),
+                text=ch_pd["ht_ptax"],
                 yaxis="y2",
+                hovertemplate="<b>%{fullData.name}</b><br>%{x}<br>%{text}<extra></extra>",
             )
         )
         fig_comex.update_layout(
@@ -1519,10 +1570,10 @@ with nav_comex:
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             yaxis=dict(title="US$ (FOB)", side="left"),
             yaxis2=dict(title="PTAX", overlaying="y", side="right", showgrid=False),
-            hovermode="x unified",
+            hovermode="closest",
         )
-        aplicar_layout_clean(fig_comex, unified_hover=True)
-        plotly_mobile_friendly(fig_comex, key="comex_usd_ptax", use_container_width=True)
+        aplicar_layout_clean(fig_comex, unified_hover=False)
+        plotly_mobile_friendly(fig_comex, key="comex_usd_ptax")
 
         fig_brl = go.Figure()
         fig_brl.add_trace(
@@ -1531,7 +1582,10 @@ with nav_comex:
                 y=ch_pd["export_brl"],
                 name="Exportação (R$ est.)",
                 mode="lines+markers",
-                line=dict(width=2),
+                line=dict(width=2.2, color="#2563eb"),
+                marker=dict(size=7, color="#2563eb"),
+                text=ch_pd["ht_exp_brl"],
+                hovertemplate="<b>%{fullData.name}</b><br>%{x}<br>%{text}<extra></extra>",
             )
         )
         fig_brl.add_trace(
@@ -1540,17 +1594,20 @@ with nav_comex:
                 y=ch_pd["import_brl"],
                 name="Importação (R$ est.)",
                 mode="lines+markers",
-                line=dict(width=2),
+                line=dict(width=2.2, color="#ea580c"),
+                marker=dict(size=7, color="#ea580c"),
+                text=ch_pd["ht_imp_brl"],
+                hovertemplate="<b>%{fullData.name}</b><br>%{x}<br>%{text}<extra></extra>",
             )
         )
         fig_brl.update_layout(
             title="Histórico mensal — valores estimados em R$ (US$ × PTAX do mês)",
             yaxis=dict(title="R$ (estimado)"),
-            hovermode="x unified",
+            hovermode="closest",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
-        aplicar_layout_clean(fig_brl, unified_hover=True)
-        plotly_mobile_friendly(fig_brl, key="comex_brl", use_container_width=True)
+        aplicar_layout_clean(fig_brl, unified_hover=False)
+        plotly_mobile_friendly(fig_brl, key="comex_brl")
 
         anos_disp = sorted(cm0.select(pl.col("ano").unique())["ano"].to_list(), reverse=True)
         ano_tot = st.selectbox("Totais anuais (US$ e R$ estimado)", anos_disp, index=0, key="comex_ano_totais")
@@ -1574,7 +1631,7 @@ with nav_comex:
                     pl.col("brl").alias("Total R$ (estimado)"),
                 ]
             ).select(["Fluxo", "Total US$ (FOB)", "Total R$ (estimado)"]),
-            use_container_width=True,
+            width="stretch",
             height=120,
         )
 
@@ -1592,7 +1649,7 @@ with nav_comex:
                             pl.col("valor_brl_estimado").alias("R$ (est.)"),
                         ]
                     ),
-                    use_container_width=True,
+                    width="stretch",
                     height=420,
                 )
             else:
@@ -1610,7 +1667,7 @@ with nav_comex:
                             pl.col("valor_brl_estimado").alias("R$ (est.)"),
                         ]
                     ),
-                    use_container_width=True,
+                    width="stretch",
                     height=420,
                 )
             else:
@@ -1623,7 +1680,7 @@ with nav_comex:
             file_name="comex_botucatu_mensal.csv",
             mime="text/csv",
             key="dl_comex_mensal",
-            use_container_width=True,
+            width="stretch",
         )
         d2.download_button(
             "CSV — top SH4 export",
@@ -1631,7 +1688,7 @@ with nav_comex:
             file_name="comex_botucatu_top_sh4_export.csv",
             mime="text/csv",
             key="dl_comex_sh4_ex",
-            use_container_width=True,
+            width="stretch",
         )
         d3.download_button(
             "CSV — top SH4 import",
@@ -1639,7 +1696,7 @@ with nav_comex:
             file_name="comex_botucatu_top_sh4_import.csv",
             mime="text/csv",
             key="dl_comex_sh4_im",
-            use_container_width=True,
+            width="stretch",
         )
         d4.download_button(
             "CSV — metadados",
@@ -1647,7 +1704,7 @@ with nav_comex:
             file_name="comex_botucatu_meta.csv",
             mime="text/csv",
             key="dl_comex_meta",
-            use_container_width=True,
+            width="stretch",
         )
 
 
