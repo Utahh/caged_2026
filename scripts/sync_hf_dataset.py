@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Sobe artefatos CSV (e README) do projeto para um Dataset no Hugging Face Hub.
+Sobe artefatos CSV (README + metadados CAGED) para um Dataset no Hugging Face Hub.
 
-Requer: pip install huggingface_hub
-Token: variável de ambiente HF_TOKEN ou HUGGING_FACE_HUB_TOKEN (https://huggingface.co/settings/tokens)
+Requer: pip install -r requirements-hf.txt
 
-Repositório alvo (dataset):
-  HF_REPO — padrão: Utahh/caged_2026 (ajuste se o dataset no Hub tiver outro nome)
+Token (qualquer uma):
+  - Variável de ambiente HF_TOKEN ou HUGGING_FACE_HUB_TOKEN
+  - Ou arquivo `.env` / `.env.local` na raiz do projeto com linha: HF_TOKEN=hf_...
+
+Repositório: HF_REPO (padrão Utahh/caged_2026) — https://huggingface.co/settings/tokens
 """
 from __future__ import annotations
 
@@ -35,13 +37,41 @@ DEFAULT_FILES = [
     "data/comex_sh4_cnae_aproximacao.csv",
 ]
 
+# Opcionais (após pipeline / staging CAGED)
+OPTIONAL_FILES = [
+    ("data/caged_staging/exec_meta.json", "metadata/exec_meta.json"),
+]
+
+
+def _load_token_from_dotenv(root: Path) -> str | None:
+    for name in (".env", ".env.local"):
+        path = root / name
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            for key in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
+                if line.startswith(f"{key}="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return None
+
 
 def main() -> int:
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    token = (
+        os.environ.get("HF_TOKEN")
+        or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        or _load_token_from_dotenv(ROOT)
+    )
     if not token:
         print(
-            "Defina HF_TOKEN (ou HUGGING_FACE_HUB_TOKEN) com um token de escrita em "
-            "https://huggingface.co/settings/tokens",
+            "Defina HF_TOKEN: variável de ambiente, ou crie `.env` na raiz com HF_TOKEN=hf_...\n"
+            "Token em https://huggingface.co/settings/tokens",
             file=sys.stderr,
         )
         return 2
@@ -54,7 +84,7 @@ def main() -> int:
     try:
         from huggingface_hub import HfApi
     except ImportError:
-        print("Instale: pip install huggingface_hub", file=sys.stderr)
+        print("Instale: pip install -r requirements-hf.txt", file=sys.stderr)
         return 2
 
     api = HfApi(token=token)
@@ -74,6 +104,21 @@ def main() -> int:
             repo_id=repo_id,
             repo_type="dataset",
             commit_message=f"chore: atualiza {path_in_repo}",
+        )
+        uploaded += 1
+
+    for rel_local, rel_remote in OPTIONAL_FILES:
+        path = ROOT / rel_local
+        if not path.is_file():
+            print(f"[skip] opcional ausente: {rel_local}")
+            continue
+        print(f"[upload] {rel_local} → {rel_remote} …")
+        api.upload_file(
+            path_or_fileobj=str(path),
+            path_in_repo=rel_remote.replace("\\", "/"),
+            repo_id=repo_id,
+            repo_type="dataset",
+            commit_message=f"chore: atualiza {rel_remote}",
         )
         uploaded += 1
 

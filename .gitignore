@@ -12,6 +12,10 @@ env/
 # Streamlit/cache
 .streamlit/secrets.toml
 
+# Segredos locais (ex.: HF_TOKEN para scripts/sync_hf_dataset.py)
+.env
+.env.local
+
 # IDE/OS files
 .DS_Store
 Thumbs.db
