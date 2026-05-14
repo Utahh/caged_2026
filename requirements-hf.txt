@@ -1,0 +1,3 @@
+# Opcional: sincronizar datasets com o Hugging Face Hub
+# pip install -r requirements-hf.txt
+huggingface_hub>=0.26,<2

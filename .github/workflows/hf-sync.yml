@@ -1,0 +1,30 @@
+name: Sync Hugging Face dataset
+
+on:
+  workflow_dispatch:
+    inputs:
+      hf_repo:
+        description: "Dataset repo id (org/name)"
+        required: false
+        default: "Utahh/caged_2026"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install huggingface_hub
+        run: pip install -r requirements-hf.txt
+
+      - name: Upload CSVs to Hub
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO: ${{ inputs.hf_repo }}
+        run: python scripts/sync_hf_dataset.py

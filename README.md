@@ -202,6 +202,21 @@ O projeto possui workflow em `.github/workflows/ci-cd.yml` com:
 
 Para deploy público do painel, o Streamlit Community Cloud faz atualização automática quando há push na branch conectada.
 
+## Hugging Face Hub (dataset)
+
+Para publicar ou atualizar os CSVs em um **Dataset** no Hugging Face (ex.: espelho dos dados do repositório):
+
+1. Crie um token com permissão de escrita em [Configuração → Access Tokens](https://huggingface.co/settings/tokens).
+2. Instale a dependência opcional: `pip install -r requirements-hf.txt`
+3. Defina o token e (se quiser outro nome) o repositório:
+   - `HF_TOKEN` ou `HUGGING_FACE_HUB_TOKEN`
+   - `HF_REPO` (padrão: `Utahh/caged_2026`, formato `usuario/nome-do-dataset`)
+4. Execute: `python scripts/sync_hf_dataset.py`
+
+O script cria o dataset se não existir e envia os principais CSVs + `README.md`.
+
+**GitHub Actions:** workflow [Sync Hugging Face dataset](.github/workflows/hf-sync.yml) (`workflow_dispatch`). Configure o secret **`HF_TOKEN`** no repositório GitHub e dispare a action manualmente; opcionalmente altere o input `hf_repo`.
+
 ## Observações de atualização mensal
 
 Como o MVP usa arquivos estáticos, para atualizar os dados:
