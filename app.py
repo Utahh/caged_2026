@@ -121,6 +121,29 @@ def mom(atual: float, anterior: float) -> float:
     return ((atual - anterior) / abs(anterior)) * 100
 
 
+def caged_volume_admissoes_desligamentos(df: pl.DataFrame) -> tuple[float, float, float]:
+    """
+    Saldo líquido = Σ saldomovimentacao.
+
+    Admissões / desligamentos: se o CSV tiver colunas `admissao` e `demissao`, usamos Σ delas — o export
+    do pipeline agrega por subclasse somando massas calculadas no microdado (Novo CAGED, |saldo|>1 por linha).
+    Só Σ max(saldo,0) **por linha agregada** subcontaria (várias movimentações na mesma subclasse viram um net).
+
+    Sem essas colunas (microdado linha a linha ou arquivo legado), caímos em Σ max(saldo,0) e Σ max(-saldo,0).
+    """
+    if df.is_empty() or "saldomovimentacao" not in df.columns:
+        return 0.0, 0.0, 0.0
+    s = pl.col("saldomovimentacao").cast(pl.Float64).fill_null(0)
+    liq = float(df.select(s.sum()).item() or 0.0)
+    if "admissao" in df.columns and "demissao" in df.columns:
+        adm = float(df.select(pl.col("admissao").cast(pl.Float64).fill_null(0).sum()).item() or 0.0)
+        dem = float(df.select(pl.col("demissao").cast(pl.Float64).fill_null(0).sum()).item() or 0.0)
+        return adm, dem, liq
+    adm = float(df.select(pl.when(s > 0).then(s).otherwise(0).sum()).item() or 0.0)
+    dem = float(df.select(pl.when(s < 0).then(-s).otherwise(0).sum()).item() or 0.0)
+    return adm, dem, liq
+
+
 def path_exist(paths: list[Path]) -> Path | None:
     return next((p for p in paths if p.exists()), None)
 
@@ -154,22 +177,30 @@ def gerar_pdf_caged(df_caged_completo: pl.DataFrame, mes_selecionado: int, ano: 
         12: "Dezembro",
     }
 
-    caged_all = df_caged_completo.filter(pl.col("mes_referencia").is_not_null())
+    caged_all0 = df_caged_completo.filter(pl.col("mes_referencia").is_not_null())
+    if "ano_referencia" in caged_all0.columns:
+        caged_all = caged_all0.filter(pl.col("ano_referencia").cast(pl.Int64) == int(ano))
+    else:
+        caged_all = caged_all0
+
+    ay = int(ano)
     caged_mes = caged_all.filter(pl.col("mes_referencia") == mes_selecionado)
-    caged_prev = caged_all.filter(pl.col("mes_referencia") == max(1, mes_selecionado - 1))
+    if mes_selecionado > 1:
+        caged_prev = caged_all.filter(pl.col("mes_referencia") == mes_selecionado - 1)
+    else:
+        caged_prev = caged_all0.filter(
+            (pl.col("ano_referencia").cast(pl.Int64) == ay - 1) & (pl.col("mes_referencia") == 12)
+        )
 
-    admissoes = float(caged_mes.select(pl.col("admissao").sum()).item() or 0.0)
-    desligamentos = float(caged_mes.select(pl.col("demissao").sum()).item() or 0.0)
-    saldo = admissoes - desligamentos
-
-    adm_prev = float(caged_prev.select(pl.col("admissao").sum()).item() or 0.0)
-    des_prev = float(caged_prev.select(pl.col("demissao").sum()).item() or 0.0)
-    saldo_prev = adm_prev - des_prev
+    admissoes, desligamentos, saldo_liq = caged_volume_admissoes_desligamentos(caged_mes)
+    saldo = saldo_liq
+    adm_prev, des_prev, saldo_prev_liq = caged_volume_admissoes_desligamentos(caged_prev)
+    saldo_prev = saldo_prev_liq
     variacao_perc = mom(saldo, saldo_prev)
 
     setores = (
         caged_mes.group_by("Grande Grupo")
-        .agg((pl.col("admissao").sum() - pl.col("demissao").sum()).alias("Saldo"))
+        .agg(pl.col("saldomovimentacao").cast(pl.Float64).fill_null(0).sum().alias("Saldo"))
         .sort("Saldo", descending=True)
     )
     maior_setor = setores.item(0, "Grande Grupo") if not setores.is_empty() else "Sem dados"
@@ -682,6 +713,7 @@ def empresas_botucatu_por_sh4(join_df: pl.DataFrame, map_df: pl.DataFrame, sh4: 
         c
         for c in [
             "cnpj",
+            "razao_social",
             "cnae_fiscal_principal",
             "cnae_subclasse",
             "divisao_cnae",
@@ -705,12 +737,20 @@ def comex_sh4_select_labels(exp: pl.DataFrame, imp: pl.DataFrame, map_df: pl.Dat
             desc = str(row[1] or "").strip()
             if sh4 not in labels:
                 labels[sh4] = desc
-    if not map_df.is_empty() and "sh4" in map_df.columns:
-        for s in map_df["sh4"].unique().to_list():
-            k = str(s).strip().zfill(4)
-            if k not in labels:
-                labels[k] = "SH4 (catálogo de aproximação)"
-    return {k: f"{k} — {v[:78]}{'…' if len(v) > 78 else ''}" for k, v in sorted(labels.items())}
+    nota_por_sh4: dict[str, str] = {}
+    if not map_df.is_empty() and "sh4" in map_df.columns and "nota" in map_df.columns:
+        for row in map_df.select(["sh4", "nota"]).iter_rows(named=False):
+            k = str(row[0]).strip().zfill(4)
+            n = str(row[1] or "").strip()
+            if k and k not in nota_por_sh4 and n:
+                nota_por_sh4[k] = n
+    out_labels: dict[str, str] = {}
+    for k in sorted(set(labels) | set(nota_por_sh4)):
+        desc = (labels.get(k) or "").strip()
+        if not desc:
+            desc = nota_por_sh4.get(k, "SH4 (mapeamento aproximado)")
+        out_labels[k] = f"{k} — {desc[:78]}{'…' if len(desc) > 78 else ''}"
+    return out_labels
 
 
 def normalize_caged(df: pl.DataFrame) -> pl.DataFrame:
@@ -735,15 +775,26 @@ def normalize_caged(df: pl.DataFrame) -> pl.DataFrame:
         .then(pl.col("subclasse_descricao").cast(pl.String))
         .otherwise(pl.lit("Não Identificado"))
     )
+    sm = pl.col("saldomovimentacao").cast(pl.Float64).fill_null(0.0)
+    adm_col = (
+        pl.col("admissao").cast(pl.Float64).fill_null(0.0)
+        if "admissao" in df.columns
+        else pl.when(sm > 0).then(sm).otherwise(0.0)
+    ).alias("admissao")
+    dem_col = (
+        pl.col("demissao").cast(pl.Float64).fill_null(0.0)
+        if "demissao" in df.columns
+        else pl.when(sm < 0).then(-sm).otherwise(0.0)
+    ).alias("demissao")
     return df.with_columns(
         [
             (pl.col("ano_referencia").cast(pl.Int64) if "ano_referencia" in df.columns else pl.lit(2026)).alias(
                 "ano_referencia"
             ),
             pl.col("mes_referencia").cast(pl.Int64),
-            pl.col("admissao").cast(pl.Float64).fill_null(0.0),
-            pl.col("demissao").cast(pl.Float64).fill_null(0.0),
-            pl.col("saldomovimentacao").cast(pl.Float64).fill_null(0.0),
+            adm_col,
+            dem_col,
+            sm.alias("saldomovimentacao"),
             pl.col("subclasse").cast(pl.String).str.zfill(7),
             grande.alias("Grande Grupo"),
             grande.alias("Atividade Econômica"),
@@ -882,7 +933,10 @@ with nav_painel:
     st.caption(f"Painel — recorte selecionado: **{MESES[month]}/{ano}**.")
     if not caged.is_empty():
         st.markdown("## Emprego formal (CAGED)")
-        st.caption("Admissões, desligamentos, saldo e estoque — com evolução em 12 meses e comparativo entre municípios.")
+        st.caption(
+            "Admissões e desligamentos usam as colunas **admissao** e **demissao** do CSV (massas somadas no microdado "
+            "antes da agregação por CNAE). O saldo líquido do mês é **Σ saldomovimentacao**."
+        )
         c = caged.filter(pl.col("ano_referencia") == ano)
         if grupo != "Todos":
             c = c.filter(pl.col("Grande Grupo") == grupo)
@@ -893,20 +947,16 @@ with nav_painel:
         if grupo != "Todos":
             c_prev = c_prev.filter(pl.col("Grande Grupo") == grupo)
 
-        adm = float(c_month.select(pl.col("admissao").sum()).item())
-        des = float(c_month.select(pl.col("demissao").sum()).item())
-        saldo = adm - des
-        estoque = float(c.select(pl.col("saldomovimentacao").sum()).item())
-        adm_prev = float(c_prev.select(pl.col("admissao").sum()).item())
-        des_prev = float(c_prev.select(pl.col("demissao").sum()).item())
-        saldo_prev = adm_prev - des_prev
+        adm, des, saldo_liq = caged_volume_admissoes_desligamentos(c_month)
+        saldo = saldo_liq
+        adm_prev, des_prev, saldo_prev = caged_volume_admissoes_desligamentos(c_prev)
 
         k1, k2 = st.columns(2)
         k3, k4 = st.columns(2)
         k1.metric("Admissões", br_int(adm), f"{mom(adm, adm_prev):+.1f}%")
         k2.metric("Desligamentos", br_int(des), f"{mom(des, des_prev):+.1f}%", delta_color="inverse")
         k3.metric("Saldo", br_int(saldo), f"{mom(saldo, saldo_prev):+.1f}%")
-        k4.metric("Estoque", br_int(estoque))
+        k4.metric("Volume bruto (adm+des)", br_int(adm + des))
 
         c_12m = caged.with_columns((pl.col("ano_referencia") * 12 + pl.col("mes_referencia")).alias("ord_mes"))
         ord_atual = ano * 12 + month
@@ -918,9 +968,9 @@ with nav_painel:
             c_12m.group_by(["ano_referencia", "mes_referencia"])
             .agg(
                 [
-                    pl.col("admissao").sum().alias("Admissões"),
-                    pl.col("demissao").sum().alias("Desligamentos"),
-                    (pl.col("admissao").sum() - pl.col("demissao").sum()).alias("Saldo"),
+                    pl.col("admissao").cast(pl.Float64).fill_null(0).sum().alias("Admissões"),
+                    pl.col("demissao").cast(pl.Float64).fill_null(0).sum().alias("Desligamentos"),
+                    pl.col("saldomovimentacao").cast(pl.Float64).fill_null(0).sum().alias("Saldo"),
                 ]
             )
             .sort(["ano_referencia", "mes_referencia"])
@@ -1090,9 +1140,9 @@ with nav_painel:
             .group_by("CNAE 2.0 Subclasse")
             .agg(
                 [
-                    pl.col("admissao").sum().alias("Admissões"),
-                    pl.col("demissao").sum().alias("Desligamentos"),
-                    (pl.col("admissao").sum() - pl.col("demissao").sum()).alias("Saldo"),
+                    pl.col("admissao").cast(pl.Float64).fill_null(0).sum().alias("Admissões"),
+                    pl.col("demissao").cast(pl.Float64).fill_null(0).sum().alias("Desligamentos"),
+                    pl.col("saldomovimentacao").cast(pl.Float64).fill_null(0).sum().alias("Saldo"),
                 ]
             )
             .sort("Saldo", descending=True)
@@ -1112,7 +1162,7 @@ with nav_painel:
         saldo_atividade = (
             c.filter(pl.col("mes_referencia") == month)
             .group_by("Atividade Econômica")
-            .agg((pl.col("admissao").sum() - pl.col("demissao").sum()).alias("Saldo"))
+            .agg(pl.col("saldomovimentacao").cast(pl.Float64).fill_null(0).sum().alias("Saldo"))
             .select(["Atividade Econômica", "Saldo"])
             .sort("Saldo", descending=True)
             .head(10)

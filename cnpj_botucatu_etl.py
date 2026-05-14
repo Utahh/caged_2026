@@ -312,11 +312,25 @@ def _resolve_empresas_header_columns(columns: Iterable[str]) -> Optional[Tuple[s
     return None
 
 
+def _resolve_empresas_razao_social_column(columns: Iterable[str]) -> Optional[str]:
+    cm = normalize_col_map(columns)
+    return first_column_present(
+        cm,
+        [
+            "razao_social",
+            "razaosocial",
+            "nome_empresarial",
+            "nomeempresarial",
+            "nome_empresa",
+        ],
+    )
+
+
 def load_empresas_for_bases(
     work_dir: Path, base_url: str, bases: Set[str], digits_needed: Set[str]
 ) -> pd.DataFrame:
     frames: List[pd.DataFrame] = []
-    usecols_legacy = [0, 5]
+    usecols_legacy = [0, 1, 5]
     for d in sorted(digits_needed):
         url = f"{base_url.rstrip('/')}/Empresas{d}.zip"
         zpath = work_dir / f"Empresas{d}.zip"
@@ -335,6 +349,7 @@ def load_empresas_for_bases(
                     log(f"Empresas{d}: layout com cabeçalho (colunas {hdr[0]}, {hdr[1]}).")
             if hdr:
                 c0, c1 = hdr
+                c_raz = _resolve_empresas_razao_social_column(peek.columns)
                 for chunk in pd.read_csv(
                     tmp_e,
                     sep=";",
@@ -344,26 +359,34 @@ def load_empresas_for_bases(
                     chunksize=300_000,
                     low_memory=False,
                 ):
-                    sub = chunk[[c0, c1]].rename(columns={c0: "cnpj_basico", c1: "porte_empresa"})
+                    if c_raz and c_raz in chunk.columns:
+                        sub = chunk[[c0, c_raz, c1]].rename(
+                            columns={c0: "cnpj_basico", c_raz: "razao_social", c1: "porte_empresa"}
+                        )
+                    else:
+                        sub = chunk[[c0, c1]].rename(columns={c0: "cnpj_basico", c1: "porte_empresa"})
+                        sub["razao_social"] = ""
                     sub["cnpj_basico"] = sub["cnpj_basico"].map(norm_cnpj_basico)
+                    sub["razao_social"] = sub["razao_social"].fillna("").astype(str).str.strip()
                     hit = sub[sub["cnpj_basico"].isin(bases)]
                     if not hit.empty:
                         frames.append(hit.drop_duplicates("cnpj_basico"))
             else:
                 if simples_csv_first_row_looks_like_header(tmp_e):
-                    log(f"Empresas{d}: cabeçalho não mapeado; usando posições legadas 0 e 5.")
+                    log(f"Empresas{d}: cabeçalho não mapeado; usando posições legadas 0, 1 e 5 (CNPJ, razão, porte).")
                 for chunk in pd.read_csv(
                     tmp_e,
                     sep=";",
                     header=None,
                     usecols=usecols_legacy,
-                    names=["cnpj_basico", "porte_empresa"],
+                    names=["cnpj_basico", "razao_social", "porte_empresa"],
                     dtype=str,
                     encoding="latin-1",
                     chunksize=300_000,
                     low_memory=False,
                 ):
                     chunk["cnpj_basico"] = chunk["cnpj_basico"].map(norm_cnpj_basico)
+                    chunk["razao_social"] = chunk["razao_social"].fillna("").astype(str).str.strip()
                     hit = chunk[chunk["cnpj_basico"].isin(bases)]
                     if not hit.empty:
                         frames.append(hit.drop_duplicates("cnpj_basico"))
@@ -378,7 +401,7 @@ def load_empresas_for_bases(
         except OSError:
             pass
     if not frames:
-        return pd.DataFrame(columns=["cnpj_basico", "porte_empresa"])
+        return pd.DataFrame(columns=["cnpj_basico", "razao_social", "porte_empresa"])
     return pd.concat(frames, ignore_index=True).drop_duplicates("cnpj_basico")
 
 
@@ -529,6 +552,7 @@ JOIN_EMPRESAS_CSV_COLUMNS = [
     "municipio_ibge",
     "municipio_nome",
     "cnpj_basico",
+    "razao_social",
     "cnpj",
     "identificador_matriz_filial",
     "situacao_cadastral",
@@ -630,6 +654,10 @@ def build_join_empresas_export(
 
     jb["municipio_ibge"] = municipio_ibge
     jb["municipio_nome"] = municipio_nome
+    if "razao_social" not in jb.columns:
+        jb["razao_social"] = ""
+    else:
+        jb["razao_social"] = jb["razao_social"].fillna("").astype(str).str.strip()
     ord_ = jb["cnpj_ordem"].astype(str).str.strip().str.replace(r"\D", "", regex=True).str.zfill(4)
     dv = jb["cnpj_dv"].astype(str).str.strip().str.replace(r"\D", "", regex=True).str.zfill(2)
     jb["cnpj"] = jb["cnpj_basico"].astype(str).str.strip() + ord_ + dv
@@ -829,6 +857,10 @@ def _run_cnpj_botucatu_etl_at(
     sim = load_simples_for_bases(WORK_DIR, resolved_url, bases)
 
     merged = rep.merge(emp, on="cnpj_basico", how="left").merge(sim, on="cnpj_basico", how="left")
+    if "razao_social" not in merged.columns:
+        merged["razao_social"] = ""
+    else:
+        merged["razao_social"] = merged["razao_social"].fillna("").astype(str).str.strip()
     merged["opcao_mei"] = merged["opcao_mei"].fillna("N").astype(str).str.strip().str.upper()
     _mei_sim = merged["opcao_mei"].isin(["S", "SIM", "1", "Y", "YES"])
     merged["data_opcao_mei"] = parse_rf_date(merged["data_opcao_mei"])

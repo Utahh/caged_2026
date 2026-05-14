@@ -137,6 +137,8 @@ Use o último mês que apareceu como concluído no log (`CAGED mês YYYY-MM …`
 
 **Deduplicação de movimentos:** se o mesmo identificador existir com o **mesmo nome de coluna** em MOV, FOR e EXC, linhas repetidas são removidas antes do agregado, mantendo a declaração mais recente (pasta FTP mais nova e prioridade EXC > FOR > MOV). Desativar: `PIPELINE_CAGED_DEDUPE_ID=0`.
 
+**Camada evento → fato (auditoria):** após a deduplicação, o micro vigente vira fato mensal por CNAE (Botucatu) e por município (comparativo), via `caged_eventos.py`. Cada execução grava `data/caged_staging/exec_meta.json` (schema v2: contagens, **SHA-256 dos .7z** baixados por competência de pasta FTP, flags). Gzip opcional do micro (`eventos_botucatu_micro.csv.gz` e `eventos_comparativo_municipios_micro.csv.gz`): `PIPELINE_CAGED_EXPORT_EVENTOS=1`. Pasta alternativa: `PIPELINE_CAGED_STAGING_DIR`.
+
 **Limpar CSVs antes de uma carga cheia:** `PIPELINE_CLEAN_OUTPUTS=1` remove os arquivos de saída na raiz antes de gerar os novos (não há banco SQL — os CSV são o “armazém”).
 
 ## Funcionalidades do MVP

@@ -8,11 +8,20 @@ import urllib.request
 import unicodedata
 from datetime import date
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import hashlib
 import pandas as pd
 import py7zr
 import requests
+
+from caged_eventos import (
+    build_exec_meta_v2,
+    finalize_caged_botucatu_layers,
+    finalize_caged_comp_municipios_layers,
+    staging_dir,
+    write_exec_meta,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -458,17 +467,20 @@ def _strip_caged_dedup_aux_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=[c for c in dropme if c in df.columns], errors="ignore")
 
 
-def dedupe_caged_micro_rows_before_agg(df: pd.DataFrame) -> pd.DataFrame:
+def dedupe_caged_micro_rows_before_agg(df: pd.DataFrame, *, strip_aux: bool = True) -> pd.DataFrame:
     """
     Evita contar duas vezes a mesma movimentação se ela reaparecer entre MOV/FOR/EXC ou entre
     competências de declaração (pasta FTP), mantendo a ocorrência mais recente.
+
+    strip_aux: se False, mantém colunas de proveniência (__caged_mov_id, pasta FTP, rank MOV/FOR/EXC)
+    para export na camada de eventos (`caged_eventos.finalize_caged_botucatu_layers`).
     """
     if not CAGED_DEDUPE_BY_ID or df.empty or "__caged_mov_id" not in df.columns:
-        return _strip_caged_dedup_aux_columns(df)
+        return _strip_caged_dedup_aux_columns(df) if strip_aux else df
     key = df["__caged_mov_id"].astype(str).str.strip()
     has_id = key.ne("") & key.notna()
     if not has_id.any():
-        return _strip_caged_dedup_aux_columns(df)
+        return _strip_caged_dedup_aux_columns(df) if strip_aux else df
     n0 = len(df)
     sort_cols = ["ano_referencia", "mes_referencia", "__ftp_decl_y", "__ftp_decl_m", "__caged_src_rank"]
     dedupe_subset = ["__caged_mov_id"]
@@ -482,7 +494,7 @@ def dedupe_caged_micro_rows_before_agg(df: pd.DataFrame) -> pd.DataFrame:
             f"Deduplicação CAGED: removidas {n0 - len(out)} linhas com mesmo id de movimentação "
             "(mantida a declaração mais recente por pasta FTP e prioridade EXC>FOR>MOV)."
         )
-    return _strip_caged_dedup_aux_columns(out)
+    return _strip_caged_dedup_aux_columns(out) if strip_aux else out
 
 
 def _cleanup_caged_extract(archive_path: Path, raw_file: Path | None, extract_dir: Path) -> None:
@@ -497,7 +509,19 @@ def _cleanup_caged_extract(archive_path: Path, raw_file: Path | None, extract_di
         log(f"Aviso de limpeza CAGED ({archive_path.name}): {cleanup_exc}")
 
 
-def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def _sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
+    """Hash SHA-256 do arquivo no disco (streaming)."""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFrame, List[Dict[str, Any]]]:
     """
     Consolida MOV + FOR + EXC da **mesma** competência (mesma pasta FTP / mesmo snapshot).
 
@@ -514,6 +538,9 @@ def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFra
     (`competencia` AAAAMM, par ano/mês, ou pasta) que seja **legível em todos** os arquivos, para que
     retificações FOR movam totais para o mês correto do evento. O histórico é **vivo**: cada execução
     reprocessa o intervalo e sobrescreve os CSVs com o snapshot atual do FTP.
+
+    Retorna também a lista `ftp_fontes_7z` (SHA-256 e tamanho de cada .7z baixado nesta competência).
+    A agregação em fatos e o `exec_meta.json` ficam em `caged_eventos`.
     """
     month_txt = f"{month:02d}"
     year_txt = str(year)
@@ -524,6 +551,7 @@ def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFra
         ("CAGEDFOR", False),
         ("CAGEDEXC", False),
     ]
+    ftp_snapshots_mes: List[Dict[str, Any]] = []
 
     frames: List[pd.DataFrame] = []
     frames_comp: List[pd.DataFrame] = []
@@ -550,6 +578,20 @@ def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFra
             continue
 
         log(f"Download concluído: {archive_path.name}")
+        try:
+            digest = _sha256_file(archive_path)
+            ftp_snapshots_mes.append(
+                {
+                    "competencia_pasta_ftp": f"{year}-{month:02d}",
+                    "prefixo": prefix,
+                    "arquivo": fname,
+                    "sha256": digest,
+                    "bytes": int(archive_path.stat().st_size),
+                }
+            )
+        except OSError as hex_exc:
+            log(f"Aviso: SHA-256 de {fname} não calculado: {hex_exc}")
+
         extracted_files = extract_7z(archive_path, extract_dir)
         txt_files = [p for p in extracted_files if p.suffix.lower() in (".txt", ".csv")]
         if not txt_files:
@@ -593,6 +635,7 @@ def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFra
                 ]
             ),
             pd.DataFrame(columns=["ano_referencia", "mes_referencia", "municipio_codigo", "Saldo"]),
+            ftp_snapshots_mes,
         )
 
     id_col = choose_caged_movement_id_column(stages)
@@ -651,8 +694,10 @@ def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFra
             filtered["saldomovimentacao"] = pd.to_numeric(filtered[col_map["saldo"]], errors="coerce").fillna(
                 0
             ).astype(int)
-            filtered["admissao"] = (filtered["saldomovimentacao"] == 1).astype(int)
-            filtered["demissao"] = (filtered["saldomovimentacao"] == -1).astype(int)
+            # Novo CAGED: saldo pode ser ±2, ±3… (mais de uma vaga por linha). Admissão = massa positiva; desligamento = massa negativa.
+            sm = filtered["saldomovimentacao"]
+            filtered["admissao"] = sm.clip(lower=0).astype(int)
+            filtered["demissao"] = (-sm.clip(upper=0)).astype(int)
 
             row_bot: Dict[str, object] = {
                 "ano_referencia": filtered["ano_referencia"],
@@ -715,6 +760,7 @@ def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFra
                 ]
             ),
             pd.DataFrame(columns=["ano_referencia", "mes_referencia", "municipio_codigo", "Saldo"]),
+            ftp_snapshots_mes,
         )
 
     month_all = pd.concat(frames, ignore_index=True)
@@ -723,7 +769,7 @@ def process_caged_month(year: int, month: int) -> Tuple[pd.DataFrame, pd.DataFra
         if frames_comp
         else pd.DataFrame(columns=["ano_referencia", "mes_referencia", "municipio_codigo", "Saldo"])
     )
-    return month_all, month_comp
+    return month_all, month_comp, ftp_snapshots_mes
 
 
 def run_caged_etl() -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -746,9 +792,11 @@ def run_caged_etl() -> Tuple[pd.DataFrame, pd.DataFrame]:
         log("CAGED: nenhum período no intervalo (verifique START_* e PIPELINE_CAGED_FTP_LAG_MONTHS / END_*).")
     monthly_results = []
     comp_results = []
+    all_ftp_snaps: List[Dict[str, Any]] = []
     for year, month in periods:
         try:
-            month_df, month_comp = process_caged_month(year, month)
+            month_df, month_comp, snaps = process_caged_month(year, month)
+            all_ftp_snaps.extend(snaps)
             log(f"CAGED mês {year}-{month:02d} finalizado. Linhas de Botucatu: {len(month_df)}")
             monthly_results.append(month_df)
             if not month_comp.empty:
@@ -765,33 +813,43 @@ def run_caged_etl() -> Tuple[pd.DataFrame, pd.DataFrame]:
     if not monthly_results:
         raise RuntimeError("Nenhum mês CAGED foi processado com sucesso.")
 
-    caged = pd.concat(monthly_results, ignore_index=True)
-    if caged.empty:
+    caged_raw = pd.concat(monthly_results, ignore_index=True)
+    if caged_raw.empty:
         log("CAGED consolidado vazio para Botucatu.")
-        return caged, pd.DataFrame(columns=["ano_referencia", "mes_referencia", "Municipio", "Saldo"])
+        return caged_raw, pd.DataFrame(columns=["ano_referencia", "mes_referencia", "Municipio", "Saldo"])
 
-    caged = dedupe_caged_micro_rows_before_agg(caged)
-    caged = (
-        caged.groupby(["ano_referencia", "mes_referencia", "secao", "subclasse"], as_index=False)[
-            ["saldomovimentacao", "admissao", "demissao"]
-        ]
-        .sum()
-        .sort_values(["ano_referencia", "mes_referencia", "secao", "subclasse"])
-    )
-    caged["subclasse"] = caged["subclasse"].map(normalize_subclasse_code)
-    # Soma de saldomovimentacao no recorte exportado (não é o estoque de empregos do CAGED).
-    caged["estoque_anual_2026"] = caged.groupby(["secao", "subclasse"])["saldomovimentacao"].transform("sum")
-    comp = pd.DataFrame(columns=["ano_referencia", "mes_referencia", "Municipio", "Saldo"])
+    caged_micro = dedupe_caged_micro_rows_before_agg(caged_raw, strip_aux=False)
+    caged, bot_info = finalize_caged_botucatu_layers(caged_micro)
+
     if comp_results:
-        comp = pd.concat(comp_results, ignore_index=True)
-        comp = dedupe_caged_micro_rows_before_agg(comp)
-        comp = (
-            comp.groupby(["ano_referencia", "mes_referencia", "municipio_codigo"], as_index=False)["Saldo"]
-            .sum()
-            .sort_values(["ano_referencia", "mes_referencia", "municipio_codigo"])
+        comp_raw = pd.concat(comp_results, ignore_index=True)
+        comp_micro = dedupe_caged_micro_rows_before_agg(comp_raw, strip_aux=False)
+        comp, comp_info = finalize_caged_comp_municipios_layers(comp_micro)
+    else:
+        comp, comp_info = finalize_caged_comp_municipios_layers(
+            pd.DataFrame(columns=["ano_referencia", "mes_referencia", "municipio_codigo", "Saldo"])
         )
+
+    if "municipio_codigo" in comp.columns:
+        comp = comp.copy()
         comp["Municipio"] = comp["municipio_codigo"].map(MUNICIPIOS_COMPARATIVO_CAGED).fillna("Outros")
         comp = comp[["ano_referencia", "mes_referencia", "Municipio", "Saldo"]]
+    else:
+        comp = pd.DataFrame(columns=["ano_referencia", "mes_referencia", "Municipio", "Saldo"])
+
+    meta = build_exec_meta_v2(
+        periods=periods,
+        dedupe_por_id=CAGED_DEDUPE_BY_ID,
+        ftp_fontes_7z=all_ftp_snaps,
+        botucatu=bot_info,
+        comparativo_municipios=comp_info,
+    )
+    write_exec_meta(staging_dir(), meta)
+    log(
+        f"CAGED staging exec_meta.json: Botucatu micro={bot_info['linhas_micro_pos_dedupe']}, "
+        f"fato={bot_info['linhas_fato_mensal']}; comparativo micro={comp_info['linhas_micro_pos_dedupe']}, "
+        f"fato={comp_info['linhas_fato_mes_municipio']}; registros_sha256_7z={len(all_ftp_snaps)}."
+    )
     return caged, comp
 
 
@@ -971,6 +1029,9 @@ def maybe_clean_pipeline_outputs() -> None:
         BASE_DIR / "caged_comparativo_municipios.csv",
         BASE_DIR / "relatorio_botucatu_q1_2026.csv",
         BASE_DIR / "investimentos_botucatu_2026.csv",
+        BASE_DIR / "data" / "caged_staging" / "exec_meta.json",
+        BASE_DIR / "data" / "caged_staging" / "eventos_botucatu_micro.csv.gz",
+        BASE_DIR / "data" / "caged_staging" / "eventos_comparativo_municipios_micro.csv.gz",
     ]
     for p in outputs:
         try:
