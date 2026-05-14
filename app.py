@@ -647,7 +647,12 @@ def load_comex_sh4_cnae_map() -> pl.DataFrame:
     )
     if not p:
         return pl.DataFrame(schema={"sh4": pl.Utf8, "cnae_prefix": pl.Utf8, "nota": pl.Utf8})
-    df = pl.read_csv(p, separator=";")
+    df = pl.read_csv(
+        p,
+        separator=";",
+        truncate_ragged_lines=True,
+        encoding="utf8",
+    )
     if "nota" not in df.columns:
         df = df.with_columns(pl.lit("").alias("nota"))
     return df.with_columns(
