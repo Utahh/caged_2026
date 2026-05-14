@@ -60,6 +60,17 @@ jobs:
       - name: Run ETL pipeline
         run: python pipeline_botucatu.py
 
+      - name: Sync Hugging Face dataset (opcional)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          pip install -r requirements-hf.txt
+          if [ -z "$HF_TOKEN" ]; then
+            echo "HF_TOKEN ausente nos secrets do repositório — pulando Hub (Settings → Secrets → Actions)."
+            exit 0
+          fi
+          python scripts/sync_hf_dataset.py
+
       - name: Commit refreshed CSVs (if changed)
         run: |
           git add caged_botucatu_q1_2026.csv caged_comparativo_municipios.csv financas_botucatu_2026.csv estban_botucatu_2025_2026.csv relatorio_botucatu_q1_2026.csv investimentos_botucatu_2026.csv
@@ -90,8 +101,9 @@ jobs:
 
       - name: Create deployable artifact
         run: |
-          mkdir -p dist
+          mkdir -p dist dist/data
           cp app.py requirements.txt README.md dist/
+          if [ -f data/comex_sh4_cnae_aproximacao.csv ]; then cp data/comex_sh4_cnae_aproximacao.csv dist/data/; fi
           if [ -f relatorio_botucatu_q1_2026.csv ]; then cp relatorio_botucatu_q1_2026.csv dist/; fi
           if [ -f caged_comparativo_municipios.csv ]; then cp caged_comparativo_municipios.csv dist/; fi
           if [ -f investimentos_botucatu_2026.csv ]; then cp investimentos_botucatu_2026.csv dist/; fi

@@ -198,7 +198,8 @@ O projeto possui workflow em `.github/workflows/ci-cd.yml` com:
   - Publica o artefato no GitHub Actions.
 - **Refresh automático de dados**:
   - Executa `pipeline_botucatu.py` diariamente (schedule) e também sob demanda (`workflow_dispatch`);
-  - Se os CSVs mudarem, faz commit automático na `main`.
+  - Se os CSVs mudarem, faz commit automático na `main`;
+  - Se existir o secret **`HF_TOKEN`**, sobe os mesmos artefatos para o **Hugging Face Dataset** (passo opcional após o ETL).
 
 Para deploy público do painel, o Streamlit Community Cloud faz atualização automática quando há push na branch conectada.
 
@@ -215,7 +216,9 @@ Para publicar ou atualizar os CSVs em um **Dataset** no Hugging Face (ex.: espel
 
 O script cria o dataset se não existir e envia os principais CSVs + `README.md`.
 
-**GitHub Actions:** workflow [Sync Hugging Face dataset](.github/workflows/hf-sync.yml) (`workflow_dispatch`). Configure o secret **`HF_TOKEN`** no repositório GitHub e dispare a action manualmente; opcionalmente altere o input `hf_repo`.
+**Automático no refresh de dados:** o job *Refresh Botucatu datasets* (cron diário ou `workflow_dispatch` em [ci-cd.yml](.github/workflows/ci-cd.yml)) roda o pipeline e, em seguida, **`python scripts/sync_hf_dataset.py`** se o secret **`HF_TOKEN`** estiver definido em *Settings → Secrets and variables → Actions* (sem secret, o passo apenas registra “pulando Hub” e segue).
+
+**GitHub Actions manual:** workflow [Sync Hugging Face dataset](.github/workflows/hf-sync.yml) (`workflow_dispatch`) — só o upload, sem rodar o pipeline completo; opcionalmente altere o input `hf_repo`.
 
 ## Observações de atualização mensal
 
