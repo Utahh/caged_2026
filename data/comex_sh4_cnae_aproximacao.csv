@@ -1,0 +1,1184 @@
+sh4;cnae_prefix;nota
+0101;01;Animais vivos — divisão agrícola/pecuária (amplo)
+0102;01;Animais vivos — pecuária (amplo)
+0105;01;Aves — pecuária
+0201;1011;Carne e miudezas — abate
+0202;1012;Carne desossada — abate
+0206;1012;Miudezas comestíveis
+0302;0321;Peixes congelados — pesca/aquicultura
+0303;0321;Peixes congelados
+0304;0321;Filés de peixe
+0401;1052;Leite e creme
+0402;1052;Leite concentrado
+0406;1052;Queijos e laticínios
+0511;0149;Produtos de origem animal — agro (aprox.)
+0601;0139;Plantas vivas — floricultura/agro
+0602;0139;Plantas para mudas
+0603;0139;Flores e botões
+0701;0119;Batatas e tubérculos
+0702;0119;Tomates
+0703;0119;Cebolas
+0704;0119;Couve-flor e repolho
+0706;0119;Cenouras e rabanetes
+0707;0119;Pepinos
+0708;0119;Legumes (amplo)
+0709;0119;Outros legumes
+0710;0119;Legumes congelados
+0711;0119;Legumes conservados
+0712;0119;Legumes secos
+0713;0119;Leguminosas secas
+0714;0119;Raízes de mandioca
+0801;0113;Cocos e castanhas
+0802;0113;Outras frutas secas
+0803;0113;Bananas
+0804;0113;Tâmaras e figos
+0805;0113;Cítricos
+0806;0113;Maçãs e peras
+0807;0113;Melões e melancias
+0808;0113;Maçãs, peras e marmelos
+0809;0113;Damascos e cerejas
+0810;0113;Outras frutas frescas
+0811;0113;Frutas congeladas
+0812;0113;Frutas secas mistas
+0813;0113;Frutas secas (outras)
+0814;0113;Cascas de cítricos
+0901;0116;Café — cultivo (também 1096 torrefação)
+0901;1096;Café torrado/moido — indústria alimentícia
+0902;1096;Chá — indústria de alimentos
+1001;0111;Trigo — cereais
+1002;0111;Centeio
+1003;0111;Cevada
+1004;0111;Aveia
+1005;0111;Milho — cereais
+1006;0111;Arroz
+1007;0111;Sorgo
+1101;1096;Farinhas — moagem
+1102;1096;Féculas
+1103;1096;Glúten de trigo
+1104;1096;Produtos de cereais
+1105;1096;Malte
+1106;1096;Amidos
+1107;1096;Inulina
+1108;1096;Amidos modificados
+1109;1096;Glúten
+1201;0115;Soja — cultivo (principal)
+1202;0115;Amendoim — oleaginosas
+1203;0115;Copra
+1204;0115;Linhaça
+1205;0115;Colza/mostarda
+1206;0115;Sementes oleaginosas
+1207;0115;Outras sementes oleaginosas
+1208;1041;Farinha e pellets de soja — moagem
+1209;1041;Sementes para semeadura
+1210;0115;Produtos de colza
+1211;0115;Plantas medicinais
+1212;0115;Algas
+1213;0115;Palhas e cascas
+1214;0115;Forragens
+1301;0139;Goma laca / resinas naturais
+1302;0139;Sucos vegetais
+1401;0220;Matérias para vassouras
+1404;0220;Palhas para artesanato
+1501;1012;Gorduras de origem animal
+1502;1012;Gorduras animais derretidas
+1503;1041;Estearina / óleo animal
+1504;1041;Óleos e gorduras de peixe
+1505;1041;Lanolina
+1506;1041;Outras gorduras animais
+1507;1041;Óleo de soja refinado — indústria
+1508;1041;Óleos vegetais fixos
+1509;1041;Óleo de oliva
+1510;1041;Outros óleos vegetais
+1511;1041;Óleos vegetais hidrogenados
+1512;1041;Ceras vegetais
+1513;1041;Óleo de coco
+1514;1041;Óleo de palma
+1515;1041;Óleos mistos
+1516;1041;Gorduras animais processadas
+1517;1041;Margarina
+1518;1041;Misturas de gorduras
+1519;1041;Outras preparações lipídicas
+1520;1041;Glicerol
+1521;1041;Ceras
+1522;1041;Resíduos de graxaria
+1601;1012;Salsichas e embutidos
+1602;1012;Outras preparações de carne
+1603;1012;Extratos de carne
+1604;0321;Preparações de peixe
+1605;0321;Crustáceos preparados
+1701;1081;Açúcar de cana
+1702;1081;Outros açúcares
+1703;1081;Melaço
+1704;1081;Resíduos de açúcar
+1801;1082;Cacau em grão
+1802;1082;Cascas de cacau
+1803;1082;Pasta de cacau
+1804;1082;Manteiga de cacau
+1805;1082;Cacau em pó
+1806;1082;Chocolate
+1901;1096;Preparações de cereais/massas
+1902;1096;Massas alimentícias
+1903;1096;Tapioca
+1904;1096;Produtos de padaria
+1905;1096;Bolachas e biscoitos
+2001;1095;Conservas de vegetais
+2002;1095;Conservas de tomate
+2003;1095;Conservas de cogumelos
+2004;1095;Outras conservas
+2005;1095;Outros vegetais preparados
+2006;1095;Legumes/frutas conservados
+2007;1095;Doces e geleias
+2008;1095;Frutas preparadas
+2009;1095;Sucos concentrados
+2101;1095;Extratos e essências — alimentos
+2102;1095;Leveduras
+2103;1095;Sauces e condimentos
+2104;1095;Sopas e caldos
+2105;1095;Sorvetes
+2106;1095;Preparações alimentícias diversas
+2201;1101;Águas minerais
+2202;1101;Bebidas com gás
+2203;1101;Cerveja
+2204;1101;Vinho
+2205;1101;Vermute
+2206;1101;Outras fermentadas
+2207;1101;Etilílicas
+2208;1101;Vodka
+2209;1101;Outras bebidas alcoólicas
+2301;1099;Farinhas de origem animal — rações
+2302;1099;Arroz quebrado para ração
+2303;1099;Resíduos de moagem
+2304;1099;Polpas para ração
+2305;1099;Resíduos de cervejaria
+2306;1099;Bagaço e resíduos vegetais
+2307;1099;Outros resíduos alimentícios
+2308;1099;Materiais vegetais para ração
+2309;1099;Preparações para alimentação animal
+2401;1220;Fumo não manufaturado
+2402;1220;Charutos
+2403;1220;Outros produtos do fumo
+2501;0810;Sal
+2502;0810;Enxofre
+2503;0810;Gesso
+2504;0810;Grafite natural
+2505;0810;Areias quartzosas
+2506;0810;Quartzito
+2507;0810;Caolim
+2508;0810;Argilas
+2509;0810;Carbonato de cálcio
+2510;0810;Fosfatos
+2511;0810;Carbonato de bário
+2512;0810;Silício
+2513;0810;Pumice
+2514;0810;Ardósia
+2515;0810;Mármore
+2516;0810;Granito
+2517;0810;Cascalho
+2518;0810;Dolomita
+2519;0810;Carbonato de magnésio
+2520;0810;Gesso para construção
+2521;0810;Cal virgem
+2522;0810;Cimento hidráulico
+2523;2394;Cimento — indústria de construção
+2524;0810;Amianto
+2525;0810;Mica
+2526;0810;Esteatita
+2528;0810;Boratos
+2529;0810;Minerais diversos
+2601;0710;Minérios de ferro
+2602;0710;Minérios de manganês
+2603;0710;Minérios de cobre
+2604;0710;Minérios de níquel
+2605;0710;Minérios de cobalto
+2606;0710;Minérios de alumínio
+2607;0710;Minérios de chumbo
+2608;0710;Minérios de zinco
+2609;0710;Minérios de estanho
+2610;0710;Minérios de cromo
+2611;0710;Minérios de tungstênio
+2612;0710;Minérios de urânio
+2613;0710;Minérios de molibdênio
+2614;0710;Minérios de titânio
+2615;0710;Minérios de nióbio
+2616;0710;Minérios de prata
+2617;0710;Minérios diversos
+2618;0710;Escória granulada
+2619;0710;Cinzas e resíduos de metalurgia
+2701;1921;Antracite e carvão
+2702;1921;Linhites
+2703;1921;Turfa
+2704;1921;Coque
+2705;1921;Gás de hulha
+2706;1921;Alcatrões
+2707;1921;Óleos de petróleo leves
+2708;1921;Óleos de petróleo pesados
+2709;1921;Óleo cru de petróleo
+2710;1921;Óleos de petróleo refinados
+2711;1921;Gás natural liquefeito
+2712;1921;Parafinas
+2713;1921;Coque de petróleo
+2714;1921;Betumes
+2715;1921;Resíduos de petróleo
+2716;1921;Energia elétrica (classificação comex)
+2801;2011;Cloro e derivados
+2802;2011;Enxofre sublimado
+2803;2011;Carbono
+2804;2011;Hidrogênio
+2805;2011;Gases nobres
+2806;2011;Cloreto de hidrogênio
+2807;2011;Ácido sulfúrico
+2808;2011;Ácido nítrico
+2809;2011;Pentóxido de difósforo
+2810;2011;Óxidos de boro
+2811;2011;Outros ácidos inorgânicos
+2812;2011;Haletos de não-metais
+2813;2011;Sulfetos de não-metais
+2814;2011;Amônia anidra
+2815;2011;Hidróxido de sódio
+2816;2011;Peróxidos
+2817;2011;Fósforo branco
+2818;2011;Arsênio
+2819;2011;Óxidos de cromo
+2820;2011;Dióxido de manganês
+2821;2011;Óxidos de ferro
+2822;2011;Cobalto
+2823;2011;Titânio
+2824;2011;Chumbo
+2825;2011;Hidrazina
+2826;2011;Fluorides
+2827;2011;Cloretos
+2828;2011;Hipoclorito
+2829;2011;Percloratos
+2830;2011;Sulfatos
+2831;2011;Ditionitos
+2832;2011;Sulfitos
+2833;2011;Alumínio sulfato
+2834;2011;Nitritos
+2835;2011;Fosfinatos
+2836;2011;Carbonatos
+2837;2011;Cianetos
+2838;2011;Silicatos
+2839;2011;Metais alcalinos
+2840;2011;Peróxidos de boro
+2841;2011;Sal de mesa
+2842;2011;Terra rara
+2843;2011;Urânio empobrecido
+2844;2011;Elementos radioativos
+2845;2011;Água pesada
+2846;2011;Compostos de mercúrio
+2847;2011;Peróxido de hidrogênio
+2848;2011;Fosfeto
+2849;2011;Carbeto de cálcio
+2850;2011;Hidretos
+2851;2011;Compostos inorgânicos diversos
+2852;2011;Mercúrio
+2853;2011;Fósforo
+2901;2013;Hidrocarbonetos acíclicos
+2902;2013;Benzeno
+2903;2013;Hidrocarbonetos cíclicos
+2904;2013;Derivados de hidrocarbonetos
+2905;2013;Derivados acíclicos halogenados
+2906;2013;Derivados aromáticos
+2907;2013;Fenóis
+2908;2013;Derivados de fenóis
+2909;2013;Éteres
+2910;2013;Epóxidos
+2911;2013;Acetais
+2912;2013;Aldeídos cíclicos
+2913;2013;Halogenados de carbonila
+2914;2013;Cetonas
+2915;2013;Ácidos saturados
+2916;2013;Ácidos insaturados
+2917;2013;Anidridos polibásicos
+2918;2013;Derivados de ácidos
+2919;2013;Fosfatos de tris
+2920;2013;Ésteres de fosfato
+2921;2013;Compostos aminados
+2922;2013;Aminoácidos
+2923;2013;Quaternários de amônio
+2924;2013;Carboximidas
+2925;2013;Carboximidas cíclicas
+2926;2013;Nitrilas
+2927;2013;Reagentes diazo
+2928;2013;Derivados de metais
+2929;2013;Outros compostos orgânicos
+2930;2111;Compostos organo-sulfurados — química fina
+2931;2111;Compostos organo-inorgânicos
+2932;2111;Heterocíclicos com oxigênio
+2933;2111;Heterocíclicos com nitrogênio
+2934;2111;Nucleosídeos
+2935;2111;Sulfonamidas
+2936;2111;Provitaminas e vitaminas
+2937;2111;Hormônios
+2938;2111;Glicosídeos
+2939;2111;Alcaloides
+2940;2111;Derivados de química fina
+2941;2111;Antibióticos
+2942;2013;Outros orgânicos
+3001;2121;Órgãos e suas partes — medicamentos
+3002;2121;Sangue humano / imunológicos
+3003;2121;Medicamentos misturados
+3004;2121;Medicamentos em dose — farmo
+3005;2121;Ataduras e gazes
+3006;2121;Preparações farmacêuticas
+3101;2012;Adubos minerais — fertilizantes
+3102;2012;Adubos nitrogenados
+3103;2012;Adubos fosfatados
+3104;2012;Adubos potássicos
+3105;2012;Adubos compostos
+3201;2011;Matérias corantes
+3202;2011;Taninos
+3203;2011;Pigmentos
+3204;2011;Lacas
+3205;2011;Preparações corantes
+3206;2011;Pigmentos inorgânicos
+3207;2011;Vidros preparados
+3208;2011;Tintas à base de pigmentos
+3209;2011;Tintas à base de polímeros
+3210;2011;Tintas à base de solvente
+3211;2011;Tintas secagem
+3212;2011;Pigmentos para artistas
+3213;2011;Mastiques e tintas
+3214;2011;Giz e lápis
+3215;2011;Tinta impressão
+3301;2042;Óleos essenciais — cosmética
+3302;2042;Preparações odoríferas
+3303;2042;Perfumes
+3304;2042;Cosméticos e maquiagem
+3305;2042;Preparações capilares
+3306;2042;Higiene bucal
+3307;2042;Barbear
+3401;2041;Sabões — higiene
+3402;2041;Preparações orgânicas de superfície
+3403;2041;Lubrificantes
+3404;2041;Ceras artificiais
+3405;2041;Velas
+3406;2041;Pastas dentais
+3407;2041;Pastas modelar
+3501;2013;Caseína
+3502;2013;Albuminas
+3503;2013;Gelatina
+3504;2013;Peptonas
+3505;2013;Dextrinas
+3506;2013;Preparações para colagem
+3507;2013;Enzimas
+3801;2011;Grafite artificial
+3802;2011;Carvão ativado
+3803;2013;Ácidos graxos industriais
+3804;2013;Glicerol residual
+3805;2011;Esperites
+3806;2011;Óleos de desengordurar
+3807;2011;Álcoois de madeira
+3808;2013;Inseticidas e fungicidas
+3809;2011;Aprestos têxteis
+3810;2011;Aceleradores de vulcanização
+3811;2011;Líquidos anti-detonação
+3812;2011;Catalisadores preparados
+3813;2011;Explosivos preparados
+3814;2011;Solventes e diluentes
+3815;2011;Iniciadores de reação
+3816;2011;Cimentos e argamassas refratários
+3817;2011;Misturas alcalinas
+3818;2011;Elementos químicos dopados
+3819;2011;Fluidos para freios
+3820;2011;Meios de cultura
+3821;2011;Meios para diagnóstico
+3822;2011;Reagentes de laboratório
+3823;2011;Carvão industrial
+3824;2011;Preparações para ligas
+3825;2011;Resíduos de indústria química
+3826;2011;Biodiesel e misturas
+3827;2011;Misturas contendo PCB
+3901;2221;Polímeros de etileno — plásticos
+3902;2221;Polímeros de propileno
+3903;2221;Poliestireno
+3904;2221;PVC
+3905;2221;Acetatos de vinila
+3906;2221;Acrílicos
+3907;2221;Poliacetais
+3908;2221;Poliamidas
+3909;2221;Resinas de ureia
+3910;2221;Silicones
+3911;2221;Petróleo resinas
+3912;2221;Celulose regenerada
+3913;2221;Polímeros naturais modificados
+3914;2221;Trocadores de íons
+3915;2221;Desperdícios de plástico
+3916;2221;Monofilamentos
+3917;2221;Tubos de plástico rígido
+3918;2221;Revestimentos de piso
+3919;2221;Colas e pastas
+3920;2221;Filmes de plástico
+3921;2221;Chapas de plástico
+3922;2221;Banheiras e pias plásticas
+3923;2221;Artigos de transporte plástico
+3924;2221;Louça de mesa plástica
+3925;2221;Construções plásticas
+3926;2221;Outros artigos de plástico
+4001;2211;Látex natural — borracha
+4002;2211;Borracha sintética
+4003;2211;Borracha regenerada
+4004;2211;Desperdícios de borracha
+4005;2211;Borracha mista
+4006;2211;Formas de borracha
+4007;2211;Fios de borracha vulcanizada
+4008;2211;Placas de borracha celular
+4009;2211;Tubos de borracha não endurecida
+4010;2211;Correias transportadoras
+4011;2211;Pneus novos
+4012;2211;Pneus recauchutados
+4013;2211;Câmaras de ar
+4014;2211;Artigos de higiene de borracha
+4015;2211;Roupa de borracha
+4016;2211;Outros artigos de borracha
+4017;2211;Borracha endurecida
+4101;1510;Couros crus
+4102;1510;Couros curtidos
+4103;1510;Couros reconstituídos
+4104;1510;Parapartes de couro
+4105;1510;Desperdícios de couro
+4106;1510;Couros pré-curtidos
+4107;1510;Couros de répteis
+4201;1529;Selas e arreios
+4202;1529;Malas e bolsas
+4203;1529;Vestuário de couro
+4204;1529;Outros artigos de couro
+4205;1529;Artigos de couro para máquinas
+4206;1529;Desperdícios de couro trabalhado
+4301;1529;Peles com pelo
+4302;1529;Peles curtidas
+4303;1529;Vestuário de pele
+4304;1529;Peles artificiais
+4401;1610;Lenha e toras — madeira
+4402;1610;Carvão vegetal
+4403;1610;Madeira serrada
+4404;1610;Folhas para folheados
+4405;1610;Lã de madeira
+4406;1610;Travessas de madeira
+4407;1610;Madeira serrada (folhosas)
+4408;1610;Madeira serrada (coníferas)
+4409;1610;Madeira para parquet
+4410;1621;Painéis OSB / aglomerados — madeira
+4411;1621;Painéis de fibras — madeira
+4412;1621;Madeira contraplacada
+4413;1621;Madeira densificada
+4414;1621;Molduras de madeira
+4415;1621;Embalagens de madeira
+4416;1621;Obras de carpintaria
+4417;1621;Ferramentas de cabo de madeira
+4418;1621;Construções de madeira
+4419;1621;Artigos de mesa de madeira
+4420;1621;Obras de marchetaria
+4421;1621;Outras obras de madeira
+4501;0899;Marfim e ossos
+4502;0899;Coral e conchas
+4503;0899;Galantite
+4504;0899;Desperdícios de penas
+4601;1629;Obras de vime — artesanato
+4602;1629;Obras de matérias têxteis vegetais
+4701;1710;Pastas de celulose — papel
+4702;1710;Papel reciclado
+4703;1710;Papel Kraft cru
+4704;1710;Papel Kraft branqueado
+4705;1710;Papel semiquímico
+4706;1710;Pastas de fibras recuperadas
+4707;1710;Recortes de papel
+4801;1710;Papel notícia
+4802;1710;Papel escrita
+4803;1710;Papel higiênico
+4804;1710;Papel Kraft sacos
+4805;1710;Outros papéis não revestidos
+4806;1710;Papel vegetal
+4807;1710;Papel ondulado
+4808;1710;Papel ondulado multicamadas
+4809;1710;Papel carbono
+4810;1710;Papel revestido
+4811;1710;Papel gesso
+4812;1710;Blocos de papel
+4813;1710;Papel cigarro
+4814;1710;Papel wallpaper
+4815;1710;Papel carbono duplicador
+4816;1710;Papel tissue
+4817;1710;Caixas de papelão
+4818;1710;Sanitários de papel
+4819;1710;Recipientes de papel
+4820;1710;Cadernos
+4821;1710;Etiquetas de papel
+4822;1710;Bobinas para máquinas
+4823;1710;Outros papéis cortados
+4901;1811;Livros e brochuras — editoração
+4902;1811;Jornais
+4903;1811;Ilustrados infantis
+4904;1811;Música impressa
+4905;1811;Mapas
+4906;1811;Planos
+4907;1811;Selos e timbres
+4908;1811;Decalques
+4909;1811;Cartões-postais
+4910;1811;Calendários
+4911;1811;Material publicitário
+5001;1354;Sedas — têxtil
+5002;1354;Desperdícios de seda
+5003;1354;Seda não cardada
+5004;1354;Fios de seda
+5005;1354;Fios de desperdício de seda
+5006;1354;Tecidos de seda
+5007;1354;Tecidos mistos seda
+5101;1351;Lã cardada
+5102;1351;Lã penteado
+5103;1351;Desperdícios de lã
+5104;1351;Fios de lã cardada
+5105;1351;Fios de lã penteado
+5106;1351;Fios de pelo fino
+5107;1351;Tecidos de lã cardada
+5108;1351;Tecidos de lã penteado
+5109;1351;Tecidos de pelo fino
+5110;1351;Tecidos de pelo grosso
+5111;1351;Tecidos de algodão <85%
+5112;1351;Tecidos de algodão >85%
+5113;1351;Tecidos de fibras sintéticas
+5201;1352;Algodão não cardado
+5202;1352;Algodão penteado
+5203;1352;Desperdício de algodão
+5204;1352;Fios de algodão costura
+5205;1352;Fios de algodão retalho
+5206;1352;Fios de algodão simples
+5207;1352;Fios de algodão múltiplos
+5208;1352;Fios de algodão retorcido
+5209;1352;Fios de algodão especial
+5210;1352;Fios de algodão retalho penteado
+5211;1352;Tecidos de algodão <85% <200g
+5212;1352;Tecidos de algodão >85% <200g
+5301;1353;Linho em bruto
+5302;1353;Linho trabalhado
+5303;1353;Juta e fibras têxteis
+5304;1353;Fios de linho
+5305;1353;Fios de juta
+5306;1353;Tecidos de linho
+5307;1353;Tecidos de juta
+5308;1353;Tecidos de fibras têxteis
+5309;1353;Tecidos de linho misto
+5310;1353;Tecidos de juta misto
+5311;1353;Tecidos de fibras vegetais
+5401;1354;Monofilamento sintético
+5402;1354;Fios sintéticos costura
+5403;1354;Fios artificiais texturizados
+5404;1354;Fios sintéticos monofilamento
+5405;1354;Fios artificiais
+5406;1354;Fios sintéticos múltiplos
+5407;1354;Fios sintéticos retorcidos
+5408;1354;Fios artificiais retorcidos
+5501;1354;Fibras descontínuas sintéticas
+5502;1354;Fibras descontínuas artificiais
+5503;1354;Fibras sintéticas não cardadas
+5504;1354;Fibras artificiais não cardadas
+5505;1354;Desperdício de fibras sintéticas
+5506;1354;Fios de nailon
+5507;1354;Outros fios sintéticos
+5508;1354;Fios de viscose
+5509;1354;Fios mistos sintéticos
+5510;1354;Fios de poliéster
+5511;1354;Tecidos de fibras sintéticas
+5512;1354;Tecidos de fibras artificiais
+5513;1354;Tecidos de poliéster
+5514;1354;Tecidos de nailon
+5515;1354;Outros tecidos sintéticos
+5516;1354;Fios de fibras artificiais
+5601;1354;Pastas de feltro
+5602;1354;Feltro
+5603;1354;Nonwoven
+5604;1354;Cordas de borracha
+5605;1354;Metálico com plástico
+5606;1354;Fios revestidos
+5607;1354;Cordas e cordéis
+5608;1354;Redes
+5609;1354;Artigos de cordoaria
+5701;1354;Tapetes de nó
+5702;1354;Tapetes tecidos
+5703;1354;Tapetes tufting
+5704;1354;Tapetes de feltro
+5705;1354;Outros tapetes
+5801;1354;Tecidos de veludo
+5802;1354;Tecidos de renda
+5803;1354;Tecidos de gaze
+5804;1354;Tules
+5805;1354;Tecidos ornamentados
+5806;1354;Fitas estreitas
+5807;1354;Etiquetas tecidas
+5808;1354;Bordados em peça
+5809;1354;Tecidos de metal
+5810;1354;Bordados
+5811;1354;Quilts têxteis
+5901;1354;Tecidos impregnados
+5902;1354;Tyre cord
+5903;1354;Tecidos plastificados
+5904;1354;Linóleo
+5905;1354;Paredes têxteis
+5906;1354;Fitas adesivas
+5907;1354;Outros tecidos revestidos
+5908;1354;Discos de tecido
+5909;1354;Mangueiras têxteis
+5910;1354;Correias transportadoras têxteis
+5911;1354;Artigos têxteis para uso técnico
+6001;1351;Malhas de algodão
+6002;1351;Malhas de fibras sintéticas
+6003;1351;Malhas de fibras artificiais
+6004;1351;Malhas de lã
+6005;1351;Outras malhas
+6006;1351;Malhas largas
+6101;1410;Casacos de malha
+6102;1410;Casacos não malha
+6103;1410;Conjuntos têxteis
+6104;1410;Camisetas malha
+6105;1410;Camisas não malha
+6106;1410;Calcas bermudas
+6107;1410;Saias
+6108;1410;Combinações
+6109;1410;Camisetas algodão
+6110;1410;Jerseys
+6111;1410;Trajes de banho
+6112;1410;Roupa esportiva
+6113;1410;Roupa confeccionada malha
+6114;1410;Outros vestuários malha
+6115;1410;Meias e meias-calça
+6116;1410;Luvas malha
+6117;1410;Outros acessórios malha
+6201;1410;Casacos impermeáveis
+6202;1410;Casacos acolchoados
+6203;1410;Ternos masculinos
+6204;1410;Ternos femininos
+6205;1410;Camisas masculinas
+6206;1410;Blusas femininas
+6207;1410;Cuecas e camisolas
+6208;1410;Camisolas e pijamas
+6209;1410;Bebês e crianças
+6210;1410;Vestuário descartável
+6211;1410;Trajes esqui
+6212;1410;Sutiãs
+6213;1410;Lenços
+6214;1410;Xales e echarpes
+6215;1410;Gravatas e lenços
+6216;1410;Luvas não malha
+6217;1410;Outros acessórios vestuário
+6301;1410;Cobertores
+6302;1410;Roupa de cama
+6303;1410;Cortinas
+6304;1410;Outros artigos têxteis
+6305;1410;Sacos de embalagem
+6306;1410;Lonas e toldos
+6307;1410;Outras obras confeccionadas
+6308;1410;Kits de costura
+6309;1410;Vestuário usado
+6310;1410;Textis usados
+6401;1533;Calçados impermeáveis
+6402;1533;Calçados esportivos
+6403;1533;Calçados couro
+6404;1533;Calçados sintético
+6405;1533;Outros calçados
+6406;1533;Partes de calçados
+6501;3292;Chapéus e toucas
+6502;3292;Chapéus de palha
+6503;3292;Chapéus de feltro
+6504;3292;Chapéus de malha
+6505;3292;Chapéus de outros materiais
+6506;3292;Outros chapéus
+6507;3292;Capas de chapéu
+6601;3299;Guarda-chuvas
+6602;3299;Bengalas
+6603;3299;Armações guarda-chuva
+6701;1399;Penas preparadas
+6702;1399;Flores artificiais
+6703;1399;Cabelo humano
+6704;1399;Perucas
+6801;2394;Pedras naturais trabalhadas
+6802;2394;Pedras artificiais
+6803;2394;Ardósia natural
+6804;0810;Mós e rebolos
+6805;0810;Abrasivos naturais
+6806;2394;Lã de rocha
+6807;2394;Misturas asfálticas
+6808;2394;Painéis de fibrocimento
+6809;2394;Obras de gesso
+6810;2394;Cimento, concreto
+6811;2394;Obras de amianto-cimento
+6812;2394;Fibra de carbono
+6813;2394;Fragmentos de pedra
+6814;2394;Mica trabalhada
+6815;2394;Obras de pedra diversas
+6901;2342;Tijolos refratários
+6902;2342;Refratários cerâmicos
+6903;2341;Tijolos telhas cerâmicos
+6904;2341;Ladrilhos cerâmicos
+6905;2341;Telhas cerâmicas
+6906;2341;Tubos cerâmicos
+6907;2341;Peças cerâmicas esmaltadas
+6908;2341;Painéis cerâmicos
+6909;2341;Vasos cerâmicos
+6910;2341;Pias e lavatórios
+6911;2341;Louça de mesa
+6912;2341;Artigos sanitários cerâmicos
+6913;2341;Estátuas cerâmicas
+6914;2341;Outras obras cerâmicas
+7001;2319;Vidro em bloco
+7002;2319;Vidro em bola
+7003;2319;Vidro fundido
+7004;2319;Vidro despolido
+7005;2319;Vidro flotado
+7006;2319;Vidro temperado
+7007;2319;Vidro laminado
+7008;2319;Vidro isolante
+7009;2319;Espelhos
+7010;2319;Garrafas de vidro
+7011;2319;Ampolas de vidro
+7013;2319;Objetos de vidro doméstico
+7014;2319;Fibra de vidro
+7015;2319;Relógios de vidro
+7016;2319;Pedras de vidro
+7017;2319;Laboratório de vidro
+7018;2319;Bijuteria de vidro
+7019;2319;Outras obras de vidro
+7101;3211;Pérolas naturais — joias
+7102;3211;Diamantes
+7103;3211;Pedras preciosas brutas
+7104;3211;Pedras sintéticas
+7105;3211;Pó de diamante
+7106;3211;Prata em barras
+7107;3211;Metais preciosos laminados
+7108;3211;Moedas
+7109;3211;Joias de prata
+7110;3211;Joias de ouro
+7111;3211;Joias de platina
+7112;3211;Artigos de ourivesaria
+7113;3211;Artigos de bijuteria
+7114;3211;Artigos de prata
+7115;3211;Relógios de metal precioso
+7116;3211;Artigos de ourivesaria diversos
+7117;3211;Bijuteria comum
+7118;3211;Moedas falsas coleção
+7201;2411;Ligas ferrosas primárias
+7202;2411;Ferro-ligas
+7203;2411;Produtos ferrosos esponjosos
+7204;2411;Desperdícios de ferro
+7205;2411;Grânulos de ferro
+7206;2411;Ferro e aço em lingotes
+7207;2411;Semi-acabados de ferro
+7208;2411;Chapas laminadas a quente
+7209;2411;Chapas laminadas a frio
+7210;2411;Chapas galvanizadas
+7211;2411;Chapas finas revestidas
+7212;2411;Chapas enroladas
+7213;2411;Barras de ferro
+7214;2411;Barras forjadas
+7215;2411;Fios de ferro
+7216;2411;Perfis de ferro
+7217;2411;Fios de aço inoxidável
+7218;2411;Semi-inox
+7219;2411;Chapas inox
+7220;2411;Chapas inox laminadas a frio
+7221;2411;Barras inox
+7222;2411;Perfis inox
+7223;2411;Fios inox
+7224;2411;Outros semi-inox
+7225;2411;Outras ligas de aço
+7226;2411;Chapas de silício
+7227;2411;Barras de silício
+7228;2411;Outros produtos de aço
+7229;2411;Fios de outras ligas
+7301;2421;Tubos de ferro fundido
+7302;2421;Trilhos de ferro
+7303;2421;Tubos sem costura
+7304;2421;Tubos soldados
+7305;2421;Outros tubos de ferro
+7306;2421;Tubos de aço inox
+7307;2421;Acessórios de tubos
+7308;2511;Estruturas metálicas
+7309;2511;Reservatórios metálicos >300l
+7310;2511;Reservatórios <300l
+7311;2511;Recipientes para gás comprimido
+7312;2511;Fios de ferro farpado
+7313;2511;Arame farpado
+7314;2511;Telas metálicas
+7315;2511;Correntes e elos
+7316;2511;Âncoras
+7317;2511;Pregos e tachas
+7318;2511;Parafusos e porcas
+7319;2511;Agulhas de costura
+7320;2511;Molas de ferro
+7321;2511;Fogões e aquecedores domésticos
+7322;2511;Radiadores de ferro
+7323;2511;Utensílios de mesa ferro
+7324;2511;Artigos de higiene ferro
+7325;2511;Outras obras de ferro fundido
+7326;2511;Outras obras de ferro
+7401;2422;Mates de cobre; anodos
+7402;2422;Cobre refinado
+7403;2422;Barras de cobre refinado
+7404;2422;Desperdício de cobre
+7405;2422;Ligas mestre de cobre
+7406;2422;Pó de cobre
+7407;2422;Barras de ligas de cobre
+7408;2422;Fios de cobre
+7409;2422;Chapas de cobre
+7410;2422;Folhas de cobre
+7411;2422;Tubos de cobre
+7412;2422;Acessórios de cobre
+7413;2422;Artefatos de cobre doméstico
+7415;2422;Pregos de cobre
+7418;2422;Outras obras de cobre
+7419;2422;Outras obras de cobre diversas
+7501;2423;Níquel mates
+7502;2423;Níquel não ligado
+7503;2423;Desperdício de níquel
+7504;2423;Pó e flocos de níquel
+7505;2423;Barras de níquel
+7506;2423;Chapas de níquel
+7507;2423;Tubos de níquel
+7508;2423;Acessórios de níquel
+7509;2423;Outras obras de níquel
+7601;2424;Alumínio não ligado
+7602;2424;Desperdício de alumínio
+7603;2424;Pó de alumínio
+7604;2424;Barras de alumínio
+7605;2424;Perfis de alumínio
+7606;2424;Chapas de alumínio >0,2mm
+7607;2424;Folhas de alumínio
+7608;2424;Tubos de alumínio
+7609;2424;Acessórios de alumínio
+7610;2424;Estruturas de alumínio
+7611;2424;Reservatórios de alumínio
+7612;2424;Recipientes de alumínio <300l
+7613;2424;Utensílios de alumínio
+7614;2424;Cabos de alumínio
+7615;2424;Outras obras de alumínio
+7616;2424;Espumas de alumínio
+7801;2425;Chumbo refinado
+7802;2425;Desperdício de chumbo
+7803;2425;Barras de chumbo
+7804;2425;Chapas de chumbo
+7805;2425;Tubos de chumbo
+7806;2425;Chumbo em pó
+7901;2426;Zinco não ligado
+7902;2426;Desperdício de zinco
+7903;2426;Pó de zinco
+7904;2426;Barras de zinco
+7905;2426;Chapas de zinco
+7906;2426;Tubos de zinco
+7907;2426;Acessórios de zinco
+8001;2427;Estanho não ligado
+8002;2427;Desperdício de estanho
+8003;2427;Barras de estanho
+8004;2427;Chapas de estanho
+8005;2427;Tubos de estanho
+8006;2427;Pó de estanho
+8007;2427;Outras obras de estanho
+8101;2428;Tungstênio
+8102;2428;Molibdênio
+8103;2428;Tântalo
+8104;2428;Magnésio
+8105;2428;Cobalto mates
+8106;2428;Bismuto
+8107;2428;Cádmio
+8108;2428;Titânio
+8109;2428;Zircônio
+8110;2428;Antimônio
+8111;2428;Manganês
+8112;2428;Berílio
+8113;2428;Cromo
+8201;2543;Pás e alviões
+8202;2543;Serras manuais
+8203;2543;Limas e alicates
+8204;2543;Chaves de fenda
+8205;2543;Ferramentas comuns
+8206;2543;Ferramentas de duas mãos
+8207;2543;Ferramentas intercambiáveis
+8208;2543;Facas e lâminas
+8209;2543;Placas para moldes
+8210;2543;Aparelhos mecânicos manuais
+8211;2543;Facas de mesa
+8212;2543;Lâminas de barbear
+8213;2543;Tesouras
+8214;2543;Outros artigos de cutelaria
+8215;2543;Colheres e garfos
+8301;2543;Cadeados
+8302;2543;Guarnições de móveis
+8303;2543;Cofres
+8304;2543;Classificadores de papel
+8305;2543;Capas de pasta
+8306;2543;Sininhos
+8307;2543;Flexíveis de metal
+8308;2543;Fivelas
+8309;2543;Capsulas de garrafa
+8310;2543;Placas de identificação
+8311;2543;Fios de metal para soldar
+8401;2822;Reatores nucleares
+8402;2822;Caldeiras a vapor
+8403;2822;Caldeiras centrais
+8404;2822;Aparelhos auxiliares caldeiras
+8405;2822;Geradores de gás
+8406;2822;Turbinas a vapor
+8407;2824;Motores de pistão ignição
+8408;2824;Motores diesel
+8409;2824;Partes de motores
+8410;2824;Turbinas hidráulicas
+8411;2824;Turbinas a gás
+8412;2824;Outros motores
+8413;2824;Bombas para líquidos
+8414;2824;Bombas de ar
+8415;2824;Ar condicionado
+8416;2824;Trocadores de calor
+8417;2824;Fornos industriais
+8418;2824;Refrigeradores domésticos
+8419;2824;Aparelhos de aquecimento
+8420;2824;Calandras
+8421;2824;Centrifugadoras
+8422;2824;Máquinas lavar louça
+8423;2824;Aparelhos de pesagem
+8424;2824;Bicos pulverizadores
+8425;2824;Guinchos
+8426;2824;Guindastes
+8427;2824;Empilhadeiras
+8428;2824;Outros elevadores
+8429;2824;Bulldozers
+8430;2824;Outras máquinas terraplenagem
+8431;2824;Partes de máquinas 84
+8432;2824;Tratores agrícolas
+8433;2824;Máquinas colheita
+8434;2824;Ordenhadeiras
+8435;2824;Máquinas prensar
+8436;2824;Máquinas agrícolas diversas
+8437;2824;Máquinas limpeza sementes
+8438;2824;Máquinas industrial alimentícia
+8439;2824;Máquinas fabricar papel
+8440;2824;Máquinas fundição
+8441;2824;Máquinas embalagem
+8442;2824;Máquinas impressão
+8443;2824;Máquinas impressão offset
+8444;2824;Máquinas têxteis
+8445;2824;Máquinas tecelagem
+8446;2824;Máquinas tricô
+8447;2824;Máquinas costura
+8448;2824;Partes máquinas têxteis
+8449;2824;Máquinas feltro
+8450;2824;Máquinas lavar roupa
+8451;2824;Máquinas lavar industrial
+8452;2824;Máquinas costura doméstica
+8453;2824;Máquinas soldar elétrica
+8454;2824;Fornos indução
+8455;2824;Laminadores de metal
+8456;2824;Máquinas-ferramenta
+8457;2824;Centros de usinagem
+8458;2824;Tornos
+8459;2824;Máquinas furar
+8460;2824;Retificadoras
+8461;2824;Máquinas brochamento
+8462;2824;Máquinas conformar
+8463;2824;Partes máquinas-ferramenta
+8464;2824;Ferramentas de torno
+8465;2824;Ferramentas pneumáticas
+8466;2824;Partes para máquinas
+8467;2824;Ferramentas elétricas manuais
+8468;2824;Maquinaria para soldar
+8470;2824;Calculadoras
+8471;2622;Máquinas automáticas processamento dados
+8472;2622;Máquinas copiadoras
+8473;2622;Partes de máquinas informática
+8474;2824;Máquinas seleção industrial
+8475;2824;Máquinas montagem tubos
+8476;2824;Máquinas automáticas venda
+8477;2824;Máquinas misturar betão
+8478;2824;Máquinas preparar tabaco
+8479;2824;Máquinas diversas com função própria
+8480;2824;Caixas de fundição
+8481;2824;Válvulas e torneiras
+8482;2824;Rolamentos
+8483;2824;Árvores de transmissão
+8484;2824;Juntas metálicas
+8485;2824;Placas de montagem
+8486;2824;Máquinas nuclear
+8487;2824;Partes de máquinas diversas
+8501;2710;Motores elétricos
+8502;2710;Geradores elétricos
+8503;2710;Partes de motores elétricos
+8504;2710;Transformadores
+8505;2710;Eletroímãs
+8506;2710;Pilhas primárias
+8507;2710;Acumuladores elétricos
+8508;2710;Aspiradores
+8509;2710;Aparelhos eletrodomésticos pequenos
+8510;2710;Aparelhos barbear
+8511;2710;Ignição veículos
+8512;2710;Aparelhos elétricos veículos
+8513;2710;Lâmpadas portáteis
+8514;2710;Fornos industrial resistência
+8515;2710;Solda elétrica
+8516;2710;Aquecedores água elétricos
+8517;2731;Telefones e comunicação
+8518;2731;Microfones e alto-falantes
+8519;2731;Aparelhos som
+8520;2731;Gravadores magnéticos
+8521;2731;Aparelhos vídeo
+8522;2731;Partes de áudio/vídeo
+8523;2731;Mídias gravadas
+8524;2731;Aparelhos gravação plana
+8525;2731;Aparelhos transmissão rádio/TV
+8526;2731;Aparelhos radar
+8527;2731;Aparelhos recepção rádio/TV
+8528;2731;Monitores e TVs
+8529;2731;Partes de aparelhos 85
+8530;2732;Aparelhos elétricos sinalização ferroviária
+8531;2732;Aparelhos elétricos sinalização trânsito
+8532;2732;Capacitadores
+8533;2732;Resistências elétricas
+8534;2732;Circuitos impressos
+8535;2732;Aparelhos interruptores >1000V
+8536;2732;Aparelhos interruptores <1000V
+8537;2732;Quadros de distribuição
+8538;2732;Partes de aparelhos 8535-37
+8539;2732;Lâmpadas e tubos
+8540;2732;Tubos catódicos
+8541;2732;Diodos e semicondutores
+8542;2732;Circuitos integrados
+8543;2732;Aparelhos elétricos isolantes
+8544;2732;Fios e cabos isolados
+8545;2732;Eletrodos de carbono
+8546;2732;Fibras de carbono elétrico
+8547;2732;Isoladores elétricos
+8548;2732;Desperdício elétrico
+8549;2732;Aparelhos elétricos diversos
+8601;3031;Locomotivas ferroviárias
+8602;3031;Outros veículos ferroviários
+8603;3031;Vagões ferroviários
+8604;3031;Partes de locomotivas
+8605;3031;Aparelhos sinalização ferroviária
+8606;3031;Vagões tanque
+8607;3031;Partes de vagões
+8608;3031;Fixações ferroviárias
+8609;3031;Contêineres especiais
+8701;2910;Tratores — veículos
+8702;2910;Veículos motor >10 pessoas
+8703;2910;Veículos passageiros
+8704;2910;Veículos carga
+8705;2910;Veículos especiais
+8706;2910;Chassis com motor
+8707;2910;Carroçarias para veículos
+8708;2930;Partes e acessórios veículos 87
+8709;2910;Veículos não rodoviários
+8710;3031;Tanques blindados
+8711;3011;Motocicletas
+8712;3011;Cadeiras de rodas
+8713;3011;Carrinhos para inválidos
+8714;3011;Partes de bicicletas
+8715;3011;Carrinhos de bebê
+8716;3011;Reboques e semi-reboques
+8801;3031;Balões e dirigíveis
+8802;3031;Outras aeronaves
+8804;3031;Paraquedas
+8805;3031;Lançadores de aeronaves
+8806;3031;Asas e hélices
+8807;3031;Partes de aeronaves / equip. aeroespacial (aprox.)
+8808;3031;Aparelhos catapulta
+8809;3031;Aparelhos simuladores voo
+8901;3032;Cruzeiros e transatlânticos
+8902;3032;Barcos de pesca
+8903;3032;Iates e barcos recreio
+8904;3032;Barcos rebocadores
+8905;3032;Faróis e boias
+8906;3032;Embarcações de guerra
+8907;3032;Plataformas flutuantes
+8908;3032;Embarcações desmontadas
+9001;3250;Fibras ópticas
+9002;3250;Lentes ópticas
+9003;3250;Armações óculos
+9004;3250;Óculos correção
+9005;3250;Binóculos
+9006;3250;Câmeras fotográficas
+9007;3250;Projetores cinematográficos
+9008;3250;Projetores imagem
+9010;3250;Aparelhos laboratório químico
+9011;3250;Microscópios
+9012;3250;Aparelhos navegação
+9013;3250;Dispositivos laser
+9014;3250;Bússolas
+9015;3250;Instrumentos topográficos
+9016;3250;Balanças sensíveis
+9017;3250;Desenhos técnicos instrumentos
+9018;3250;Instrumentos médico-cirúrgicos
+9019;3250;Aparelhos mecano-terapia
+9020;3250;Máscaras de gás
+9021;3250;Artigos ortopédicos
+9022;3250;Aparelhos raio-X
+9023;3250;Instrumentos física/química
+9024;3250;Máquinas ensaio dureza
+9025;3250;Higrômetros e termômetros
+9026;3250;Instrumentos medição pressão
+9027;3250;Instrumentos análise físico-química
+9028;3250;Contadores de gás/água
+9029;3250;Contadores revolução
+9030;3250;Osciloscópios
+9031;3250;Instrumentos medição elétricos
+9032;3250;Instrumentos automáticos
+9033;3250;Partes de instrumentos 90
+9101;3250;Relógios de pulso
+9102;3250;Relógios de bolso
+9103;3250;Relógios despertadores
+9104;3250;Relógios painel
+9105;3250;Relógios diversos
+9106;3250;Cronômetros
+9107;3250;Interruptores relógio
+9108;3250;Mecanismos de relógio
+9109;3250;Mostradores relógio
+9110;3250;Caixas de relógio
+9111;3250;Partes de relógios
+9112;3250;Quadros de relógio
+9113;3250;Aparelhos artigos armamento
+9114;3250;Armas de fogo
+9201;3250;Instrumentos musicais cordas
+9202;3250;Instrumentos musicais teclas
+9203;3250;Órgãos musicais
+9204;3250;Acordeões
+9205;3250;Instrumentos de sopro
+9206;3250;Instrumentos percussão
+9207;3250;Partes de instrumentos
+9208;3250;Caixas de música
+9209;3250;Fios de metais para instrumentos
+9301;3250;Munições
+9302;3250;Armas brancas
+9303;3250;Outras armas
+9304;3250;Outras armas de fogo
+9305;3250;Partes de armas
+9306;3250;Bombas e granadas
+9401;3104;Assentos móveis
+9402;3104;Mobiliário médico
+9403;3104;Outros móveis
+9404;3104;Suportes de colchão
+9405;2740;Luminárias
+9406;3104;Construções pré-fabricadas
+9503;3240;Brinquedos
+9504;3240;Videogames
+9505;3240;Artigos festa
+9506;3240;Equipamentos esportes
+9507;3240;Caça e pesca
+9508;3240;Carrosséis
+9601;3299;Marfim trabalhado
+9602;3299;Pó vegetal para escova
+9603;3299;Vassouras
+9604;3299;Peneiras
+9605;3299;Conjuntos viagem
+9606;3299;Botões
+9607;3299;Fechos e zíperes
+9608;3299;Canetas
+9609;3299;Lápis
+9610;3299;Quadros ardósia
+9611;3299;Carimbos
+9612;3299;Fitas para máquina escrever
+9613;3299;Isqueiros
+9614;3299;Cachimbos
+9615;3299;Pentes
+9616;3299;Vaporizadores
+9617;3299;Garrafas térmicas
+9618;3299;Manequins
+9619;3299;Absorventes e fraldas
+9620;3299;Monopés e tripés
+9701;3299;Quadros pintura
+9702;3299;Selos postais
+9703;3299;Antiguidades >100 anos

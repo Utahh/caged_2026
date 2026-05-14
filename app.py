@@ -314,6 +314,14 @@ def format_brl_full(v: float) -> str:
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
+def format_usd_fob_en(v: float | None) -> str:
+    """US$ no padrão internacional: milhar com vírgula e decimal com ponto (ex.: US$ 1,234,567.89)."""
+    if v is None or (isinstance(v, float) and v != v):
+        return "—"
+    s = f"{float(v):,.2f}"
+    return f"US$ {s}"
+
+
 def csv_bytes_from_pandas(df) -> bytes:
     return df.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
 
@@ -597,6 +605,80 @@ def load_comex_botucatu() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.
     return meta, men, top_e, top_i
 
 
+@st.cache_data
+def load_comex_sh4_cnae_map() -> pl.DataFrame:
+    """Mapeamento heurístico SH4 → prefixo(s) de CNAE fiscal (subclasse); arquivo editável em data/."""
+    root = Path(__file__).resolve().parent
+    data_dir = root / "data"
+    p = path_exist(
+        [
+            root / "comex_sh4_cnae_aproximacao.csv",
+            data_dir / "comex_sh4_cnae_aproximacao.csv",
+        ]
+    )
+    if not p:
+        return pl.DataFrame(schema={"sh4": pl.Utf8, "cnae_prefix": pl.Utf8, "nota": pl.Utf8})
+    df = pl.read_csv(p, separator=";")
+    if "nota" not in df.columns:
+        df = df.with_columns(pl.lit("").alias("nota"))
+    return df.with_columns(
+        pl.col("sh4").cast(pl.Utf8).str.strip_chars().str.zfill(4),
+        pl.col("cnae_prefix").cast(pl.Utf8).str.strip_chars(),
+        pl.col("nota").cast(pl.Utf8).fill_null(""),
+    )
+
+
+def empresas_botucatu_por_sh4(join_df: pl.DataFrame, map_df: pl.DataFrame, sh4: str) -> tuple[pl.DataFrame, list[str]]:
+    """Filtra empresas do join municipal cujo CNAE fiscal principal começa com algum prefixo mapeado ao SH4."""
+    if join_df.is_empty() or map_df.is_empty():
+        return pl.DataFrame(), []
+    sh4z = str(sh4).strip().zfill(4)
+    sub_m = map_df.filter(pl.col("sh4") == sh4z)
+    prefs = sub_m["cnae_prefix"].unique().drop_nulls().to_list()
+    notas = sub_m["nota"].unique().drop_nulls().to_list() if "nota" in sub_m.columns else []
+    prefs = [str(p) for p in prefs if p]
+    if not prefs:
+        return pl.DataFrame(), notas
+    if "cnae_fiscal_principal" not in join_df.columns:
+        return pl.DataFrame(), notas
+    ac = pl.col("cnae_fiscal_principal").cast(pl.Utf8).str.strip_chars().fill_null("")
+    or_expr = pl.any_horizontal(*[ac.str.starts_with(p) for p in prefs])
+    out = join_df.filter(or_expr)
+    vis = [
+        c
+        for c in [
+            "cnpj",
+            "cnae_fiscal_principal",
+            "cnae_subclasse",
+            "divisao_cnae",
+            "divisao_descricao",
+            "tipo_empresa",
+            "porte_cadastral_descricao",
+            "situacao_cadastral_descricao",
+        ]
+        if c in out.columns
+    ]
+    return out.select(vis) if vis else out, notas
+
+
+def comex_sh4_select_labels(exp: pl.DataFrame, imp: pl.DataFrame, map_df: pl.DataFrame) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for frame in (exp, imp):
+        if frame.is_empty() or "sh4" not in frame.columns:
+            continue
+        for row in frame.select(["sh4", "descricao"]).iter_rows(named=False):
+            sh4 = str(row[0]).strip().zfill(4)
+            desc = str(row[1] or "").strip()
+            if sh4 not in labels:
+                labels[sh4] = desc
+    if not map_df.is_empty() and "sh4" in map_df.columns:
+        for s in map_df["sh4"].unique().to_list():
+            k = str(s).strip().zfill(4)
+            if k not in labels:
+                labels[k] = "SH4 (catálogo de aproximação)"
+    return {k: f"{k} — {v[:78]}{'…' if len(v) > 78 else ''}" for k, v in sorted(labels.items())}
+
+
 def normalize_caged(df: pl.DataFrame) -> pl.DataFrame:
     if df.is_empty():
         return df
@@ -689,6 +771,7 @@ def normalize_fin(df: pl.DataFrame) -> pl.DataFrame:
 caged_raw, fin_raw, caged_comp_raw = load_data()
 cnpj_resumo_raw, cnpj_mei_raw, cnpj_porte_raw, cnpj_cnae_raw, cnpj_join_raw, cnpj_meis_raw, cnpj_muni_fonte_raw = load_cnpj_botucatu()
 comex_meta_raw, comex_mensal_raw, comex_top_exp_raw, comex_top_imp_raw = load_comex_botucatu()
+comex_sh4_cnae_map = load_comex_sh4_cnae_map()
 has_cnpj_export = not cnpj_resumo_raw.is_empty()
 has_comex = not comex_mensal_raw.is_empty()
 comex_meta_kv: dict[str, str] = (
@@ -1381,13 +1464,9 @@ with nav_painel:
 with nav_comex:
     st.header("Balança comercial (Comex Stat / MDIC)")
     st.caption(
-        "Indicadores e gráficos usam a **série mensal do CSV Comex** (não usam Ano/Mês do filtro do Painel). "
-        "KPIs do topo = **último mês publicado** na série."
-    )
-    st.caption(
-        "Recorte **municipal** (município do declarante), valores **FOB em US$**. "
-        "Estimativa em **R$** = US$ × média mensal **PTAX** (BCB SGS 1, dólar venda). "
-        "Painel: [Comex Stat](https://comexstat.mdic.gov.br/)."
+        "Série mensal municipal (declarante), FOB em US$; R$ estimado = US$ × PTAX (BCB). "
+        "Indicadores do topo = último mês da série (independente do filtro do Painel). "
+        "[Comex Stat](https://comexstat.mdic.gov.br/)."
     )
     if not has_comex:
         st.info(
@@ -1417,11 +1496,13 @@ with nav_comex:
         prev_ord = max_ord - 12
 
         nota_emp = comex_meta_kv.get("nota_empresa", "")
-        if nota_emp:
-            st.warning(nota_emp)
         metod_brl = comex_meta_kv.get("metodologia_brl", "")
-        if metod_brl:
-            st.caption(metod_brl)
+        if nota_emp.strip() or metod_brl.strip():
+            with st.expander("Notas técnicas (empresa declarante e metodologia R$)", expanded=False):
+                if nota_emp.strip():
+                    st.markdown(nota_emp)
+                if metod_brl.strip():
+                    st.caption(metod_brl)
 
         exp_usd = _comex_sum(cm0, max_ord, "exportacao", "valor_usd_fob")
         imp_usd = _comex_sum(cm0, max_ord, "importacao", "valor_usd_fob")
@@ -1437,13 +1518,7 @@ with nav_comex:
 
         rk_ano = comex_meta_kv.get("ranking_sh4_ano", "—")
         upd = comex_meta_kv.get("comex_ultima_atualizacao", "—")
-        st.caption(f"Última referência Comex na API: **{upd}** · ranking SH4 (produto) no ano **{rk_ano}**.")
-
-        st.markdown(
-            "**Leitura com câmbio:** a série em **US$** reflete principalmente preços internacionais e volumes em dólar; "
-            "a série em **R$** (estimada) mistura esse efeito com a variação do **dólar** (PTAX). Compare as duas para "
-            "separar movimento em moeda forte de efeito cambial."
-        )
+        st.caption(f"Referência na API: **{upd}** · ranking SH4: **{rk_ano}**.")
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric(
@@ -1500,8 +1575,7 @@ with nav_comex:
                 return "—"
             if x != x:
                 return "—"
-            s = f"{x:,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            return f"US$ FOB {s}"
+            return format_usd_fob_en(x)
 
         def _fmt_ptax_cell(v: object) -> str:
             try:
@@ -1566,13 +1640,28 @@ with nav_comex:
             )
         )
         fig_comex.update_layout(
-            title="Histórico mensal — US$ (export/import) e PTAX (eixo direito)",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             yaxis=dict(title="US$ (FOB)", side="left"),
             yaxis2=dict(title="PTAX", overlaying="y", side="right", showgrid=False),
             hovermode="closest",
         )
         aplicar_layout_clean(fig_comex, unified_hover=False)
+        fig_comex.update_layout(
+            title=dict(
+                text="Histórico mensal — US$ (export/import) e PTAX (eixo direito)",
+                x=0.02,
+                xanchor="left",
+                yanchor="top",
+                y=1.0,
+            ),
+            legend=dict(
+                orientation="h",
+                yanchor="top",
+                y=-0.2,
+                xanchor="center",
+                x=0.5,
+            ),
+            margin=dict(l=16, r=56, t=56, b=100),
+        )
         plotly_mobile_friendly(fig_comex, key="comex_usd_ptax")
 
         fig_brl = go.Figure()
@@ -1601,13 +1690,46 @@ with nav_comex:
             )
         )
         fig_brl.update_layout(
-            title="Histórico mensal — valores estimados em R$ (US$ × PTAX do mês)",
             yaxis=dict(title="R$ (estimado)"),
             hovermode="closest",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
         aplicar_layout_clean(fig_brl, unified_hover=False)
+        fig_brl.update_layout(
+            title=dict(
+                text="Histórico mensal — valores estimados em R$ (US$ × PTAX do mês)",
+                x=0.02,
+                xanchor="left",
+                yanchor="top",
+                y=1.0,
+            ),
+            legend=dict(
+                orientation="h",
+                yanchor="top",
+                y=-0.14,
+                xanchor="center",
+                x=0.5,
+            ),
+            margin=dict(l=16, r=56, t=56, b=92),
+        )
         plotly_mobile_friendly(fig_brl, key="comex_brl")
+
+        def _fmt_cell_usd_tbl(v: object) -> str:
+            try:
+                x = float(v)
+            except (TypeError, ValueError):
+                return "—"
+            if x != x:
+                return "—"
+            return format_usd_fob_en(x)
+
+        def _fmt_cell_brl_tbl(v: object) -> str:
+            try:
+                x = float(v)
+            except (TypeError, ValueError):
+                return "—"
+            if x != x:
+                return "—"
+            return format_brl_full(x)
 
         anos_disp = sorted(cm0.select(pl.col("ano").unique())["ano"].to_list(), reverse=True)
         ano_tot = st.selectbox("Totais anuais (US$ e R$ estimado)", anos_disp, index=0, key="comex_ano_totais")
@@ -1620,33 +1742,89 @@ with nav_comex:
             )
             .sort("fluxo")
         )
+        by_y_view = by_y.with_columns(
+            [
+                pl.when(pl.col("fluxo") == "exportacao")
+                .then(pl.lit("Exportação"))
+                .otherwise(pl.lit("Importação"))
+                .alias("Fluxo"),
+                pl.col("usd")
+                .map_elements(_fmt_cell_usd_tbl, return_dtype=pl.Utf8)
+                .alias("Total US$ (FOB)"),
+                pl.col("brl")
+                .map_elements(_fmt_cell_brl_tbl, return_dtype=pl.Utf8)
+                .alias("Total R$ (estimado)"),
+            ]
+        ).select(["Fluxo", "Total US$ (FOB)", "Total R$ (estimado)"])
         st.dataframe(
-            by_y.with_columns(
-                [
-                    pl.when(pl.col("fluxo") == "exportacao")
-                    .then(pl.lit("Exportação"))
-                    .otherwise(pl.lit("Importação"))
-                    .alias("Fluxo"),
-                    pl.col("usd").alias("Total US$ (FOB)"),
-                    pl.col("brl").alias("Total R$ (estimado)"),
-                ]
-            ).select(["Fluxo", "Total US$ (FOB)", "Total R$ (estimado)"]),
+            by_y_view,
             width="stretch",
             height=120,
         )
+
+        st.subheader("Cruzamento SH4 × CNAE (Botucatu)")
+        st.caption(
+            "Lista aproximada: prefixos de CNAE fiscal sugeridos para cada SH4 em `data/comex_sh4_cnae_aproximacao.csv`. "
+            "O Comex não associa produto a CNPJ."
+        )
+        sh4_labels = comex_sh4_select_labels(comex_top_exp_raw, comex_top_imp_raw, comex_sh4_cnae_map)
+        if not sh4_labels:
+            st.caption("Sem SH4 no ranking nem no catálogo de mapeamento.")
+        else:
+            sh4_pick = st.selectbox(
+                "SH4",
+                options=list(sh4_labels.keys()),
+                format_func=lambda k: sh4_labels[k],
+                key="comex_sh4_cnae_pick",
+            )
+            sh4z = str(sh4_pick).strip().zfill(4)
+            submap = comex_sh4_cnae_map.filter(pl.col("sh4") == sh4z)
+            if submap.is_empty():
+                st.info("Este SH4 não está no CSV de mapeamento; edite `data/comex_sh4_cnae_aproximacao.csv`.")
+            else:
+                emp_sh4, notas_map = empresas_botucatu_por_sh4(cnpj_join_raw, comex_sh4_cnae_map, sh4_pick)
+                if cnpj_join_raw.is_empty():
+                    st.caption("Gere `cnpj_botucatu_join_empresas.csv` com o ETL de CNPJ para listar empresas.")
+                elif emp_sh4.is_empty():
+                    st.caption("Nenhuma empresa no município com CNAE fiscal principal compatível com os prefixos mapeados.")
+                else:
+                    st.caption(f"{emp_sh4.height} registro(s) no join municipal.")
+                    notas_txt = [str(n).strip() for n in notas_map if str(n).strip()]
+                    if notas_txt:
+                        with st.expander("Notas do mapeamento SH4 → CNAE", expanded=False):
+                            for n in notas_txt:
+                                st.text(n)
+                    st.dataframe(emp_sh4, width="stretch", height=360)
+                    st.download_button(
+                        "CSV — empresas (aproximação por SH4)",
+                        data=csv_bytes_from_pandas(emp_sh4.to_pandas()),
+                        file_name=f"comex_sh4_{sh4z}_empresas_botucatu_aprox.csv",
+                        mime="text/csv",
+                        key="dl_comex_sh4_cnae",
+                        width="stretch",
+                    )
 
         c1, c2 = st.columns(2)
         with c1:
             st.subheader(f"Top 10 produtos (SH4) — exportação ({rk_ano})")
             if not comex_top_exp_raw.is_empty():
                 st.dataframe(
-                    comex_top_exp_raw.select(
+                    comex_top_exp_raw.with_columns(
+                        [
+                            pl.col("valor_usd_fob")
+                            .map_elements(_fmt_cell_usd_tbl, return_dtype=pl.Utf8)
+                            .alias("US$ FOB"),
+                            pl.col("valor_brl_estimado")
+                            .map_elements(_fmt_cell_brl_tbl, return_dtype=pl.Utf8)
+                            .alias("R$ (est.)"),
+                        ]
+                    ).select(
                         [
                             pl.col("rank").alias("Pos."),
                             pl.col("sh4").alias("SH4"),
                             pl.col("descricao").alias("Descrição"),
-                            pl.col("valor_usd_fob").alias("US$ FOB"),
-                            pl.col("valor_brl_estimado").alias("R$ (est.)"),
+                            pl.col("US$ FOB"),
+                            pl.col("R$ (est.)"),
                         ]
                     ),
                     width="stretch",
@@ -1658,13 +1836,22 @@ with nav_comex:
             st.subheader(f"Top 10 produtos (SH4) — importação ({rk_ano})")
             if not comex_top_imp_raw.is_empty():
                 st.dataframe(
-                    comex_top_imp_raw.select(
+                    comex_top_imp_raw.with_columns(
+                        [
+                            pl.col("valor_usd_fob")
+                            .map_elements(_fmt_cell_usd_tbl, return_dtype=pl.Utf8)
+                            .alias("US$ FOB"),
+                            pl.col("valor_brl_estimado")
+                            .map_elements(_fmt_cell_brl_tbl, return_dtype=pl.Utf8)
+                            .alias("R$ (est.)"),
+                        ]
+                    ).select(
                         [
                             pl.col("rank").alias("Pos."),
                             pl.col("sh4").alias("SH4"),
                             pl.col("descricao").alias("Descrição"),
-                            pl.col("valor_usd_fob").alias("US$ FOB"),
-                            pl.col("valor_brl_estimado").alias("R$ (est.)"),
+                            pl.col("US$ FOB"),
+                            pl.col("R$ (est.)"),
                         ]
                     ),
                     width="stretch",
