@@ -460,6 +460,35 @@ def processar_kpis_financeiros(
     return kpis, evolucao_12_meses, distribuicao_bancos
 
 
+COD_SICONFI_FUNDOS_PREFEITURA = "111111900"
+COD_SICONFI_RENDA_FIXA_PREFEITURA = "111115000"
+
+
+def sum_prefeitura_fundos_e_renda_fixa(df_fin: pl.DataFrame, mes: int, ano: int) -> tuple[float, float, float]:
+    """Siconfi (Prefeitura): saldos das contas de fundos e renda fixa no mês/ano informados. Não representa famílias."""
+    if df_fin.is_empty():
+        return float("nan"), float("nan"), float("nan")
+    req = {"Codigo_Contabil", "Ano", "Mes", "Saldo"}
+    if not req <= set(df_fin.columns):
+        return float("nan"), float("nan"), float("nan")
+    b = df_fin.with_columns(
+        [
+            pl.col("Ano").cast(pl.Int64),
+            pl.col("Mes").cast(pl.Int64),
+            pl.col("Codigo_Contabil").cast(pl.String).str.strip_chars(),
+            pl.col("Saldo").cast(pl.Float64).fill_null(0.0),
+        ]
+    ).filter((pl.col("Ano") == ano) & (pl.col("Mes") == mes))
+    f = b.filter(pl.col("Codigo_Contabil") == COD_SICONFI_FUNDOS_PREFEITURA).select(pl.col("Saldo").sum()).item()
+    rf = b.filter(pl.col("Codigo_Contabil") == COD_SICONFI_RENDA_FIXA_PREFEITURA).select(pl.col("Saldo").sum()).item()
+    vf = float(f) if f is not None else float("nan")
+    vrf = float(rf) if rf is not None else float("nan")
+    if vf != vf and vrf != vrf:
+        return float("nan"), float("nan"), float("nan")
+    tot = (vf if vf == vf else 0.0) + (vrf if vrf == vrf else 0.0)
+    return vf, vrf, tot
+
+
 def processar_dados_estban(df_estban: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     if df_estban.is_empty():
         vazio_kpi = pl.DataFrame({"valor_atual": [0.0], "delta_perc": [0.0], "data_ref": ["Sem dados"]})
@@ -679,6 +708,50 @@ def comex_sh4_select_labels(exp: pl.DataFrame, imp: pl.DataFrame, map_df: pl.Dat
     return {k: f"{k} — {v[:78]}{'…' if len(v) > 78 else ''}" for k, v in sorted(labels.items())}
 
 
+@st.cache_data
+def load_censo_botucatu() -> pl.DataFrame:
+    """Indicadores demográficos do município (Censo/IBGE) via CSV opcional."""
+    root = Path(__file__).resolve().parent
+    data_dir = root / "data"
+    p = path_exist(
+        [
+            root / "censo_botucatu_indicadores.csv",
+            data_dir / "censo_botucatu_indicadores.csv",
+        ]
+    )
+    empty = pl.DataFrame(
+        schema={
+            "indicador": pl.Utf8,
+            "valor": pl.Float64,
+            "unidade": pl.Utf8,
+            "referencia": pl.Utf8,
+            "fonte": pl.Utf8,
+        }
+    )
+    if not p:
+        return empty
+    df = pl.read_csv(p, separator=";")
+    ren = {c: c.strip().lower() for c in df.columns}
+    df = df.rename(ren)
+    if "indicador" not in df.columns or "valor" not in df.columns:
+        return empty
+    exprs = [
+        pl.col("indicador").cast(pl.Utf8).str.strip_chars(),
+        pl.col("valor")
+        .cast(pl.String)
+        .str.replace(",", ".", literal=True)
+        .cast(pl.Float64, strict=False)
+        .fill_null(0.0)
+        .alias("valor"),
+    ]
+    for name in ("unidade", "referencia", "fonte"):
+        if name in df.columns:
+            exprs.append(pl.col(name).cast(pl.Utf8).fill_null("").alias(name))
+        else:
+            exprs.append(pl.lit("").alias(name))
+    return df.select(exprs)
+
+
 def normalize_caged(df: pl.DataFrame) -> pl.DataFrame:
     if df.is_empty():
         return df
@@ -785,6 +858,7 @@ if caged_raw.is_empty() and fin_raw.is_empty() and caged_comp_raw.is_empty() and
 
 caged = normalize_caged(caged_raw)
 fin = normalize_fin(fin_raw)
+censo_ind_raw = load_censo_botucatu()
 caged_comp = (
     caged_comp_raw.with_columns(
         [
@@ -832,14 +906,15 @@ with menu_r:
     st.empty()
 
 st.caption(
-    "Popover **Filtros e período**: aplica-se ao **Painel municipal** (CAGED, comparativo e finanças). "
-    "A aba **Balança comercial** usa só a série Comex do CSV; os indicadores do topo usam o **último mês disponível** nessa série."
+    "Popover **Filtros e período**: aplica-se ao **Painel municipal** (CAGED e comparativo), à **aba Censo** "
+    "(trecho Prefeitura — mesma competência mês/ano) e às seções que leem esse recorte. "
+    "A aba **Balança comercial** usa só a série Comex do CSV."
 )
 st.caption(
     "Em telas pequenas, a página rola com prioridade; o menu de ferramentas dos gráficos fica discreto (canto, ao passar o dedo)."
 )
 
-nav_painel, nav_comex = st.tabs(["Painel municipal", "Balança comercial (Comex)"])
+nav_painel, nav_censo, nav_comex = st.tabs(["Painel municipal", "Censo / Finanças comparadas", "Balança comercial (Comex)"])
 
 with nav_painel:
     st.caption(f"Painel — recorte selecionado: **{MESES[month]}/{ano}**.")
@@ -1327,10 +1402,39 @@ with nav_painel:
                 st.info("Sem arquivo de join (`cnpj_botucatu_join_empresas.csv`). Rode o ETL CNPJ atualizado com `PIPELINE_INCLUDE_CNPJ=1`.")
 
 
-    st.divider()
-    st.header("Caixa, aplicações e poupança")
+with nav_censo:
+    st.header("Censo e finanças comparadas")
     st.caption(
-        "Liquidez municipal consolidada (valores em reais). Filtre por instituição no seletor abaixo do gráfico de barras "
+        f"Recorte do popover (Prefeitura): **{MESES[month]}/{ano}**. "
+        "Separamos o que é **conta pública** (Siconfi) do que é **população/território** (Censo/IBGE via CSV opcional)."
+    )
+
+    st.subheader("Prefeitura — tesouraria, caixa e aplicações contábeis (Siconfi)")
+    st.caption(
+        "Valores consolidados do **ente municipal** (Prefeitura de Botucatu). "
+        "Não representam poupança, CDB ou investimentos das famílias."
+    )
+    vf, vrf, vtot = sum_prefeitura_fundos_e_renda_fixa(fin, month, ano)
+    pf1, pf2, pf3 = st.columns(3)
+    pf1.metric(
+        "Fundos de investimento (conta pública)",
+        format_brl_full(vf) if vf == vf else "—",
+        help=f"Conta Siconfi {COD_SICONFI_FUNDOS_PREFEITURA} — saldo no mês selecionado.",
+    )
+    pf2.metric(
+        "Aplicações em renda fixa (conta pública)",
+        format_brl_full(vrf) if vrf == vrf else "—",
+        help=f"Conta Siconfi {COD_SICONFI_RENDA_FIXA_PREFEITURA} — saldo no mês selecionado.",
+    )
+    pf3.metric(
+        "Soma fundos + renda fixa (Prefeitura)",
+        format_brl_full(vtot) if vtot == vtot else "—",
+        help="Indicador derivado das duas contas acima (tesouraria).",
+    )
+
+    st.markdown("#### Visão geral de liquidez (todas as rubricas mapeadas)")
+    st.caption(
+        "Liquidez municipal (valores em reais). Filtre por instituição no seletor abaixo do gráfico de barras "
         "(em telas largas, ele fica à direita da evolução)."
     )
 
@@ -1460,6 +1564,40 @@ with nav_painel:
             )
     except Exception as exc:
         st.error(f"Não foi possível renderizar a Visão Financeira e Liquidez: {exc}")
+
+    st.divider()
+    st.subheader("População e território (Censo / IBGE)")
+    st.caption(
+        "Indicadores **demográficos e socioeconômicos** do município (ex.: população residente, domicílios, renda). "
+        "Carregue `censo_botucatu_indicadores.csv` na raiz ou em `data/` (separador `;`, colunas: indicador, valor, "
+        "unidade, referencia, fonte). **Patrimônio financeiro das famílias** (aplicações das pessoas) não consta do Censo "
+        "como saldo bancário municipal; exija fonte explícita (ex. estudos setoriais) se for incluir no CSV."
+    )
+    if censo_ind_raw.is_empty():
+        st.info(
+            "Nenhum `censo_botucatu_indicadores.csv` encontrado. Exporte tabelas do [SIDRA/IBGE](https://sidra.ibge.gov.br/) "
+            "para Botucatu e monte o CSV conforme o cabeçalho acima."
+        )
+    else:
+        censo_view = censo_ind_raw.select(
+            [
+                pl.col("indicador").alias("Indicador"),
+                pl.col("valor").alias("Valor"),
+                pl.col("unidade").alias("Unidade"),
+                pl.col("referencia").alias("Referência"),
+                pl.col("fonte").alias("Fonte"),
+            ]
+        )
+        st.dataframe(censo_view, width="stretch", height=min(520, 80 + censo_view.height * 36))
+        st.download_button(
+            "Baixar CSV — indicadores Censo (atual)",
+            data=csv_bytes_from_pandas(censo_ind_raw.to_pandas()),
+            file_name="censo_botucatu_indicadores.csv",
+            mime="text/csv",
+            key="dl_censo_ind",
+            width="stretch",
+        )
+
 
 with nav_comex:
     st.header("Balança comercial (Comex Stat / MDIC)")

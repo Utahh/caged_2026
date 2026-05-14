@@ -154,8 +154,10 @@ Use o último mês que apareceu como concluído no log (`CAGED mês YYYY-MM …`
     - Top 3 CNAEs (`subclasse`) que mais admitiram
     - Top 3 CNAEs (`subclasse`) que mais demitiram
 
-- **Financeiro (Siconfi)**
-  - Card com valor total mais recente de `Saldo_em_Reais` formatado em R$.
+- **Financeiro (Siconfi) — aba "Censo / Finanças comparadas"**
+  - Bloco **Prefeitura**: caixa, aplicações e poupança **do ente municipal** (não da população); métricas explícitas para fundos (`111111900`) e renda fixa (`111115000`) no mês do popover.
+  - Bloco **População e território**: tabela opcional a partir de `censo_botucatu_indicadores.csv` (indicadores Censo/IBGE agregados ao município).
+  - Card com valor total mais recente de `Saldo_em_Reais` formatado em R$ (visão geral de liquidez).
 
 - **Cadastro CNPJ e MEI (quando os CSVs existirem na raiz ou em `data/`)**
   - Abas: visão geral municipal (gráficos e totais), base **JOIN** (uma linha por empresa: Estabelecimentos + Empresas + Simples) e aba **somente MEI**.
