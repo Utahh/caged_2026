@@ -18,8 +18,9 @@ Thumbs.db
 .vscode/
 .idea/
 
-# CAGED — export micro (opcional; pode ser grande)
+# CAGED — export micro (opcional; pode ser grande) e meta local (regenerado a cada pipeline)
 data/caged_staging/*.csv.gz
+data/caged_staging/exec_meta.json
 
 # Validação local CAGED
 caged_validacao_jan2026.txt
