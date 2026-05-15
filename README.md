@@ -211,7 +211,7 @@ Para publicar ou atualizar os CSVs em um **Dataset** no Hugging Face (ex.: espel
 2. Instale a dependência opcional: `pip install -r requirements-hf.txt`
 3. Defina o token e (se quiser outro nome) o repositório:
    - `HF_TOKEN` ou `HUGGING_FACE_HUB_TOKEN` no ambiente, **ou** um arquivo **`.env`** na raiz com a linha `HF_TOKEN=hf_...` (ignorado pelo git; modelo em `.env.example`)
-   - `HF_REPO` (padrão: `Utahh/caged_2026`, formato `usuario/nome-do-dataset`)
+   - `HF_REPO` (padrão: `{seu_usuario_hf}/caged_2026` — ex.: `cauanalima/caged_2026`; o script detecta o usuário do token)
 4. Execute: `python scripts/sync_hf_dataset.py` (sobe também `metadata/exec_meta.json` se existir após o pipeline CAGED)
 
 O script cria o dataset se não existir e envia os principais CSVs + `README.md`.

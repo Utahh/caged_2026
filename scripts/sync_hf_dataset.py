@@ -77,7 +77,15 @@ def main() -> int:
         )
         return 2
 
-    repo_id = os.environ.get("HF_REPO", "Utahh/caged_2026").strip()
+    default_repo = "Utahh/caged_2026"
+    try:
+        from huggingface_hub import HfApi as _Api
+
+        who = _Api(token=token).whoami()
+        default_repo = f"{who.get('name', 'user')}/caged_2026"
+    except Exception:
+        pass
+    repo_id = os.environ.get("HF_REPO", default_repo).strip()
     if not repo_id or "/" not in repo_id:
         print("HF_REPO deve ser 'organizacao/nome-do-repo' (ex.: Utahh/caged_2026).", file=sys.stderr)
         return 2
@@ -113,7 +121,7 @@ def main() -> int:
         if not path.is_file():
             print(f"[skip] opcional ausente: {rel_local}")
             continue
-        print(f"[upload] {rel_local} → {rel_remote} …")
+        print(f"[upload] {rel_local} -> {rel_remote} ...")
         api.upload_file(
             path_or_fileobj=str(path),
             path_in_repo=rel_remote.replace("\\", "/"),
