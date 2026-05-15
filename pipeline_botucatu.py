@@ -1104,6 +1104,18 @@ def main() -> None:
                 "PIPELINE_INCLUDE_COMEX=1 — ETL Comex Stat + PTAX (vários minutos; API MDIC pode limitar taxa de requisições)."
             )
             export_comex_csvs(BASE_DIR)
+        if os.environ.get("PIPELINE_INCLUDE_COMEX_RASTREABILIDADE", "1") != "0":
+            import sys
+
+            sys.path.insert(0, str(BASE_DIR / "src"))
+            from observatorio_comex.integration import run_rastreabilidade_botucatu
+
+            log("Rastreabilidade SH4×CNAE×CNPJ (CSV local)…")
+            try:
+                fact = run_rastreabilidade_botucatu(BASE_DIR)
+                log(f"Fato SH4×empresas: {len(fact)} linhas → data/processed/fato_sh4_empresas_botucatu.csv")
+            except Exception as exc:
+                log(f"Aviso rastreabilidade Comex×CNPJ: {exc}")
         elapsed = time.time() - start
         log(f"Pipeline finalizado com sucesso em {elapsed:.1f}s.")
     finally:

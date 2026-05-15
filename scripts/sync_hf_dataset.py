@@ -40,6 +40,7 @@ DEFAULT_FILES = [
 # Opcionais (após pipeline / staging CAGED)
 OPTIONAL_FILES = [
     ("data/caged_staging/exec_meta.json", "metadata/exec_meta.json"),
+    ("data/processed/fato_sh4_empresas_botucatu.csv", "data/processed/fato_sh4_empresas_botucatu.csv"),
 ]
 
 

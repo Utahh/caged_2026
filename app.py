@@ -121,6 +121,60 @@ def mom(atual: float, anterior: float) -> float:
     return ((atual - anterior) / abs(anterior)) * 100
 
 
+def caged_build_monthly_series(df: pl.DataFrame, *, estoque_min_volume_mes: float = 500.0) -> pl.DataFrame:
+    """
+    Série mensal com admissões, desligamentos, saldo e estoque acumulado.
+
+    Estoque: Σ saldo líquido mensal a partir do primeiro mês com volume típico municipal
+    (adm+des ≥ estoque_min_volume_mes), para alinhar ao Novo CAGED / Power BI e ignorar
+    fragmentos esparsos anteriores à série contínua no microdado.
+    """
+    if df.is_empty():
+        return pl.DataFrame(
+            schema={
+                "ano_referencia": pl.Int64,
+                "mes_referencia": pl.Int64,
+                "ord_mes": pl.Int64,
+                "Admissões": pl.Float64,
+                "Desligamentos": pl.Float64,
+                "Saldo": pl.Float64,
+                "Estoque": pl.Float64,
+                "Mês": pl.Utf8,
+            }
+        )
+    monthly = (
+        df.group_by(["ano_referencia", "mes_referencia"])
+        .agg(
+            [
+                pl.col("admissao").cast(pl.Float64).fill_null(0).sum().alias("Admissões"),
+                pl.col("demissao").cast(pl.Float64).fill_null(0).sum().alias("Desligamentos"),
+                pl.col("saldomovimentacao").cast(pl.Float64).fill_null(0).sum().alias("Saldo"),
+            ]
+        )
+        .sort(["ano_referencia", "mes_referencia"])
+        .with_columns((pl.col("ano_referencia") * 12 + pl.col("mes_referencia")).alias("ord_mes"))
+    )
+    vol = pl.col("Admissões") + pl.col("Desligamentos")
+    start_ord = monthly.filter(vol >= estoque_min_volume_mes).select(pl.col("ord_mes").min()).item()
+    if start_ord is None:
+        est = monthly.select(pl.col("ord_mes"), pl.col("Saldo").cum_sum().alias("Estoque"))
+    else:
+        est = (
+            monthly.filter(pl.col("ord_mes") >= start_ord)
+            .select(pl.col("ord_mes"), pl.col("Saldo").cum_sum().alias("Estoque"))
+        )
+    monthly = monthly.join(est, on="ord_mes", how="left").with_columns(
+        pl.concat_str(
+            [
+                pl.col("mes_referencia").replace_strict(MESES),
+                pl.lit("/"),
+                pl.col("ano_referencia").cast(pl.String),
+            ]
+        ).alias("Mês")
+    )
+    return monthly
+
+
 def caged_volume_admissoes_desligamentos(df: pl.DataFrame) -> tuple[float, float, float]:
     """
     Saldo líquido = Σ saldomovimentacao.
@@ -958,31 +1012,14 @@ with nav_painel:
         k3.metric("Saldo", br_int(saldo), f"{mom(saldo, saldo_prev):+.1f}%")
         k4.metric("Volume bruto (adm+des)", br_int(adm + des))
 
-        c_12m = caged.with_columns((pl.col("ano_referencia") * 12 + pl.col("mes_referencia")).alias("ord_mes"))
-        ord_atual = ano * 12 + month
-        c_12m = c_12m.filter((pl.col("ord_mes") >= ord_atual - 11) & (pl.col("ord_mes") <= ord_atual))
+        c_series = caged
         if grupo != "Todos":
-            c_12m = c_12m.filter(pl.col("Grande Grupo") == grupo)
+            c_series = c_series.filter(pl.col("Grande Grupo") == grupo)
 
-        monthly = (
-            c_12m.group_by(["ano_referencia", "mes_referencia"])
-            .agg(
-                [
-                    pl.col("admissao").cast(pl.Float64).fill_null(0).sum().alias("Admissões"),
-                    pl.col("demissao").cast(pl.Float64).fill_null(0).sum().alias("Desligamentos"),
-                    pl.col("saldomovimentacao").cast(pl.Float64).fill_null(0).sum().alias("Saldo"),
-                ]
-            )
-            .sort(["ano_referencia", "mes_referencia"])
-            .with_columns(
-                pl.concat_str(
-                    [
-                        pl.col("mes_referencia").replace_strict(MESES),
-                        pl.lit("/"),
-                        pl.col("ano_referencia").cast(pl.String),
-                    ]
-                ).alias("Mês")
-            )
+        monthly_full = caged_build_monthly_series(c_series)
+        ord_atual = ano * 12 + month
+        monthly = monthly_full.filter(
+            (pl.col("ord_mes") >= ord_atual - 11) & (pl.col("ord_mes") <= ord_atual)
         )
         monthly_pd = monthly.to_pandas()
         monthly_pd["Mês Curto"] = monthly_pd.apply(
@@ -992,9 +1029,13 @@ with nav_painel:
         monthly_pd["Admissões_BR"] = monthly_pd["Admissões"].apply(lambda v: br_int(float(v)))
         monthly_pd["Desligamentos_BR"] = monthly_pd["Desligamentos"].apply(lambda v: br_int(float(v)))
         monthly_pd["Saldo_BR"] = monthly_pd["Saldo"].apply(lambda v: br_int(float(v)))
+        monthly_pd["Estoque_BR"] = monthly_pd["Estoque"].apply(lambda v: br_int(float(v)))
 
-        st.markdown("### Evolução mensal — admissões e desligamentos")
-        st.caption("Últimos 12 meses no período selecionado; valores no hover. Exporte a série em CSV abaixo.")
+        st.markdown("### Evolução mensal — admissões, desligamentos e estoque")
+        st.caption(
+            "Últimos 12 meses no filtro. **Estoque** = Σ saldo mensal acumulado a partir do início da série "
+            "contínua no microdado (primeiro mês com adm+des relevantes), no estilo dos painéis Novo CAGED / Power BI."
+        )
         fig_line = go.Figure()
         fig_line.add_trace(
             go.Scatter(
@@ -1024,13 +1065,30 @@ with nav_painel:
                 textfont=dict(size=10),
             )
         )
-        fig_line.update_layout(title="Admissões x Desligamentos", legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0))
+        fig_line.add_trace(
+            go.Scatter(
+                x=monthly_pd["Mês Curto"],
+                y=monthly_pd["Estoque"],
+                mode="lines+markers",
+                name="Estoque (acum.)",
+                line=dict(color="#16a34a", width=2, dash="dot"),
+                yaxis="y2",
+                customdata=monthly_pd[["Mês", "Estoque_BR"]].values,
+                hovertemplate="%{customdata[0]}<br>Estoque: %{customdata[1]}<extra></extra>",
+            )
+        )
+        fig_line.update_layout(
+            title="Admissões, desligamentos e estoque acumulado",
+            legend=dict(orientation="h", yanchor="bottom", y=1.08, x=0),
+            yaxis=dict(title="Admissões / Desligamentos"),
+            yaxis2=dict(title="Estoque", overlaying="y", side="right", showgrid=False),
+        )
         fig_line.update_xaxes(nticks=6)
         aplicar_layout_clean(fig_line, unified_hover=True)
         plotly_mobile_friendly(fig_line, key="pl_caged_line")
         st.download_button(
             "Baixar CSV — admissões e desligamentos (mensal)",
-            data=csv_bytes_from_pandas(monthly_pd[["Mês", "Admissões", "Desligamentos"]]),
+            data=csv_bytes_from_pandas(monthly_pd[["Mês", "Admissões", "Desligamentos", "Saldo", "Estoque"]]),
             file_name="caged_admissoes_desligamentos.csv",
             mime="text/csv",
             key="dl_caged_line",

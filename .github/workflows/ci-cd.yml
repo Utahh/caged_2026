@@ -29,7 +29,10 @@ jobs:
           pip install -r requirements.txt
 
       - name: Validate Python syntax
-        run: python -m py_compile app.py pipeline_botucatu.py caged_eventos.py cnpj_botucatu_etl.py comexstat_botucatu_etl.py scripts/sync_hf_dataset.py
+        run: |
+          python -m py_compile app.py pipeline_botucatu.py caged_eventos.py cnpj_botucatu_etl.py comexstat_botucatu_etl.py scripts/sync_hf_dataset.py
+          python -m py_compile scripts/run_comex_rastreabilidade.py
+          python -m py_compile src/observatorio_comex/config.py src/observatorio_comex/contracts.py src/observatorio_comex/extract.py src/observatorio_comex/transform.py src/observatorio_comex/load.py src/observatorio_comex/pipeline.py
 
       - name: Streamlit smoke import
         run: python -c "import streamlit, pandas, plotly; print('deps ok')"
