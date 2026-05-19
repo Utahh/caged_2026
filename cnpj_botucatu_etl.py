@@ -729,7 +729,7 @@ def build_join_empresas_export(
 
 
 def situacao_label(code: object) -> str:
-    s = str(code).strip() if code is not None else ""
+    s = norm_situacao_cadastral(code)
     if s == "2":
         return "Ativa"
     if s == "1":
@@ -771,6 +771,152 @@ def fetch_cnae_subclasses_reference() -> pd.DataFrame:
 def norm_cnae_subclasse(v: object) -> str:
     d = "".join(ch for ch in str(v or "") if ch.isdigit())
     return d.zfill(7) if d else ""
+
+
+def norm_situacao_cadastral(code: object) -> str:
+    """Normaliza código de situação cadastral (ex.: '02' → '2')."""
+    d = re.sub(r"\D", "", str(code or "").strip())
+    if not d:
+        return ""
+    try:
+        return str(int(d))
+    except ValueError:
+        return d
+
+
+def is_situacao_cadastral_ativa(code: object) -> bool:
+    return norm_situacao_cadastral(code) == "2"
+
+
+def apply_mei_situacao_flags(merged: pd.DataFrame) -> pd.DataFrame:
+    """Recalcula flags MEI e tipo_empresa (situação '02' = ativa)."""
+    out = merged.copy()
+    out["opcao_mei"] = out["opcao_mei"].fillna("N").astype(str).str.strip().str.upper()
+    mei_sim = out["opcao_mei"].isin(["S", "SIM", "1", "Y", "YES"])
+    out["data_opcao_mei"] = parse_rf_date(out["data_opcao_mei"])
+    out["data_exclusao_mei"] = parse_rf_date(out["data_exclusao_mei"])
+    out["mei_simples_vigente"] = mei_sim & out["data_exclusao_mei"].isna()
+    sit_ativa = out["situacao_cadastral"].map(is_situacao_cadastral_ativa)
+    out["mei_ativo"] = out["mei_simples_vigente"] & sit_ativa
+    out["mei_inativo_cnpj"] = out["mei_simples_vigente"] & ~sit_ativa
+    base_porte = out["porte_empresa"].map(porte_label)
+    out["tipo_empresa"] = base_porte.astype(str)
+    out.loc[out["mei_ativo"], "tipo_empresa"] = "MEI (ativo)"
+    out.loc[out["mei_simples_vigente"] & out["mei_inativo_cnpj"], "tipo_empresa"] = "MEI (inativo no CNPJ)"
+    return out
+
+
+def rebuild_cnpj_aggregates_from_join(join_df: pd.DataFrame, resumo_meta: Optional[dict] = None) -> Dict[str, pd.DataFrame]:
+    """
+    Reagrega resumo / porte / setor / MEI a partir do join já exportado (sem rebaixar ZIPs).
+    """
+    if join_df.empty:
+        raise ValueError("Join de empresas vazio.")
+    jb = apply_mei_situacao_flags(join_df)
+    jb["situacao_cadastral_descricao"] = jb["situacao_cadastral"].map(situacao_label)
+    total_empresas = len(jb)
+    meta = resumo_meta or {}
+    total_estab = int(meta.get("total_estabelecimentos") or total_empresas)
+    mei_ativos = int(jb["mei_ativo"].sum())
+    mei_inativos = int(jb["mei_inativo_cnpj"].sum())
+    mei_vigente = int(jb["mei_simples_vigente"].sum())
+
+    opt_dt = pd.to_datetime(jb["data_opcao_mei"], errors="coerce")
+    excl_dt = pd.to_datetime(jb["data_exclusao_mei"], errors="coerce")
+    opt_cnt = opt_dt[opt_dt.notna()].dt.to_period("M").value_counts().sort_index()
+    excl_cnt = excl_dt[excl_dt.notna()].dt.to_period("M").value_counts().sort_index()
+    all_months = sorted(set(opt_cnt.index.tolist()) | set(excl_cnt.index.tolist()))
+    mei_mensal = pd.DataFrame(
+        {
+            "ano_mes": [str(p) for p in all_months],
+            "aberturas_mei": [int(opt_cnt.get(p, 0)) for p in all_months],
+            "exclusoes_mei": [int(excl_cnt.get(p, 0)) for p in all_months],
+        }
+    )
+    if not mei_mensal.empty:
+        mei_mensal = mei_mensal.tail(48)
+
+    vc = jb["tipo_empresa"].value_counts()
+    porte_pct = (
+        pd.DataFrame({"tipo_empresa": vc.index.astype(str), "quantidade": vc.values})
+        .assign(percentual=lambda d: (100.0 * d["quantidade"] / total_empresas).round(2))
+        .sort_values("quantidade", ascending=False)
+    )
+
+    jb["divisao_descricao"] = jb.get("divisao_descricao", pd.Series(dtype=str)).fillna("")
+    jb["divisao_cnae"] = jb.get("divisao_cnae", pd.Series(dtype=str)).fillna("")
+
+    rows_cnae = []
+    for tipo, g in jb.groupby("tipo_empresa"):
+        tot_t = len(g)
+        if tot_t == 0:
+            continue
+        sub = (
+            g.groupby(["divisao_cnae", "divisao_descricao"], as_index=False)
+            .size()
+            .rename(columns={"size": "quantidade"})
+            .assign(tipo_empresa=tipo, percentual_no_tipo=lambda d: (100.0 * d["quantidade"] / tot_t).round(2))
+            .sort_values("quantidade", ascending=False)
+        )
+        sub = (
+            g.groupby(["divisao_cnae", "divisao_descricao"], as_index=False)
+            .size()
+            .rename(columns={"size": "quantidade"})
+            .assign(tipo_empresa=tipo, percentual_no_tipo=lambda d: (100.0 * d["quantidade"] / tot_t).round(2))
+            .sort_values("quantidade", ascending=False)
+        )
+        rows_cnae.append(sub)
+    cnae_x_tipo = pd.concat(rows_cnae, ignore_index=True) if rows_cnae else pd.DataFrame()
+
+    jb["macro_setor"] = jb["divisao_cnae"].map(macro_setor_from_divisao)
+    vc_setor = jb["macro_setor"].value_counts()
+    setor_macro_pct = (
+        pd.DataFrame({"macro_setor": vc_setor.index.astype(str), "quantidade": vc_setor.values})
+        .assign(percentual=lambda d: (100.0 * d["quantidade"] / total_empresas).round(2))
+        .sort_values("quantidade", ascending=False)
+    )
+
+    jb_export = jb.copy()
+    for col in ("mei_simples_vigente", "mei_ativo", "mei_inativo_cnpj"):
+        if col in jb_export.columns and jb_export[col].dtype == bool:
+            jb_export[col] = jb_export[col].map(lambda x: "1" if x else "0")
+    jb_export["data_opcao_mei"] = pd.to_datetime(jb_export["data_opcao_mei"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+    jb_export["data_exclusao_mei"] = pd.to_datetime(jb_export["data_exclusao_mei"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+
+    mei_mask = _mei_opcao_sim_series(jb_export["opcao_mei"])
+    meis = jb_export.loc[mei_mask].copy()
+
+    meta = resumo_meta or {}
+    resumo = pd.DataFrame(
+        [
+            {
+                "ref_data_extracao": meta.get("ref_data_extracao", pd.Timestamp.utcnow().strftime("%Y-%m-%d")),
+                "fonte_url": meta.get("fonte_url", ""),
+                "municipio_ibge": meta.get("municipio_ibge", BOTUCATU_IBGE_7),
+                "municipio_nome": meta.get("municipio_nome", "Botucatu"),
+                "total_empresas": total_empresas,
+                "total_estabelecimentos": meta.get("total_estabelecimentos", total_estab),
+                "mei_ativos": mei_ativos,
+                "mei_inativos_cnpj": mei_inativos,
+                "mei_opcao_sem_exclusao": mei_vigente,
+            }
+        ]
+    )
+
+    municipio_fonte = pd.DataFrame()
+    if meta.get("municipio_fonte_path") and Path(str(meta["municipio_fonte_path"])).is_file():
+        municipio_fonte = pd.read_csv(meta["municipio_fonte_path"], sep=";")
+
+    return {
+        "resumo": resumo,
+        "mei_mensal": mei_mensal,
+        "porte_pct": porte_pct,
+        "cnae_x_tipo": cnae_x_tipo,
+        "setor_macro_pct": setor_macro_pct,
+        "join_empresas": jb_export,
+        "meis": meis,
+        "municipio_fonte": municipio_fonte,
+    }
 
 
 def _cnpj_rfb_ref_candidates() -> List[str]:
@@ -908,23 +1054,9 @@ def _run_cnpj_botucatu_etl_at(
         merged["razao_social"] = ""
     else:
         merged["razao_social"] = merged["razao_social"].fillna("").astype(str).str.strip()
-    merged["opcao_mei"] = merged["opcao_mei"].fillna("N").astype(str).str.strip().str.upper()
-    _mei_sim = merged["opcao_mei"].isin(["S", "SIM", "1", "Y", "YES"])
-    merged["data_opcao_mei"] = parse_rf_date(merged["data_opcao_mei"])
-    merged["data_exclusao_mei"] = parse_rf_date(merged["data_exclusao_mei"])
     merged["situacao_cadastral"] = merged["situacao_cadastral"].fillna("").astype(str).str.strip()
     merged["cnae_subclasse"] = merged["cnae_fiscal_principal"].map(norm_cnae_subclasse)
-
-    # MEI vigente no Simples (sem data de exclusão)
-    merged["mei_simples_vigente"] = _mei_sim & merged["data_exclusao_mei"].isna()
-    merged["mei_ativo"] = merged["mei_simples_vigente"] & merged["situacao_cadastral"].eq("2")
-    merged["mei_inativo_cnpj"] = merged["mei_simples_vigente"] & ~merged["situacao_cadastral"].eq("2")
-
-    # Tipo para gráficos de porte / donut
-    base_porte = merged["porte_empresa"].map(porte_label)
-    merged["tipo_empresa"] = base_porte.astype(str)
-    merged.loc[merged["mei_ativo"], "tipo_empresa"] = "MEI (ativo)"
-    merged.loc[merged["mei_simples_vigente"] & merged["mei_inativo_cnpj"], "tipo_empresa"] = "MEI (inativo no CNPJ)"
+    merged = apply_mei_situacao_flags(merged)
 
     total_empresas = len(merged)
     mei_ativos = int(merged["mei_ativo"].sum())

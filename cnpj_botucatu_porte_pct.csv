@@ -1,5 +1,6 @@
 ﻿tipo_empresa;quantidade;percentual
 ME (Microempresa);25411;47.18
-MEI (inativo no CNPJ);15392;28.58
 Demais portes;11587;21.51
+MEI (ativo);11144;20.69
+MEI (inativo no CNPJ);4248;7.89
 EPP;1468;2.73
