@@ -93,11 +93,72 @@ st.markdown(
                 min-height: 280px;
             }
             .mobile-hide-table .stDataFrame { display: none; }
+            .obs-caption, .obs-help, .obs-subheader-help { display: none !important; }
+            div[data-testid="stExpander"] details summary { font-size: 0.95rem; }
         }
+        body.compact-ui .obs-caption,
+        body.compact-ui .obs-help,
+        body.compact-ui .obs-subheader-help { display: none !important; }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+EMPRESAS_SH4_COLS = [
+    "cnpj",
+    "razao_social",
+    "cnae_fiscal_principal",
+    "cnae_subclasse",
+    "vinculo_cnae",
+    "divisao_cnae",
+    "divisao_descricao",
+    "tipo_empresa",
+    "porte_cadastral_descricao",
+    "situacao_cadastral_descricao",
+    "habilitado_comex",
+    "motivo_aproximacao",
+]
+
+
+def ui_caption(text: str) -> None:
+    """Texto auxiliar; oculto no celular (CSS) ou com interface compacta."""
+    st.markdown(f'<p class="obs-caption" style="font-size:0.875rem;color:var(--muted-color);">{text}</p>', unsafe_allow_html=True)
+
+
+def ui_help(text: str) -> None:
+    st.markdown(f'<p class="obs-help" style="font-size:0.8rem;color:var(--muted-color);">{text}</p>', unsafe_allow_html=True)
+
+
+def _align_empresas_sh4_chunk(df: pl.DataFrame) -> pl.DataFrame:
+    """Unifica schema join CNPJ + fato SH4 antes do concat."""
+    if df.is_empty():
+        return pl.DataFrame(schema={c: pl.Utf8 for c in EMPRESAS_SH4_COLS})
+    out = df
+    if "cnpj" in out.columns:
+        out = out.with_columns(pl.col("cnpj").cast(pl.Utf8).str.replace_all(r"\D", "").alias("cnpj"))
+    elif "cnpj_basico" in out.columns:
+        out = out.with_columns(pl.col("cnpj_basico").cast(pl.Utf8).str.replace_all(r"\D", "").alias("cnpj"))
+    else:
+        out = out.with_columns(pl.lit("").cast(pl.Utf8).alias("cnpj"))
+
+    if "cnae_fiscal_principal" not in out.columns and "cnae_empresa" in out.columns:
+        out = out.with_columns(pl.col("cnae_empresa").cast(pl.Utf8).alias("cnae_fiscal_principal"))
+    if "vinculo_cnae" not in out.columns and "tipo_cnae_match" in out.columns:
+        out = out.with_columns(pl.col("tipo_cnae_match").cast(pl.Utf8).alias("vinculo_cnae"))
+    if "motivo_aproximacao" not in out.columns and "motivo_relacao" in out.columns:
+        out = out.with_columns(pl.col("motivo_relacao").cast(pl.Utf8).alias("motivo_aproximacao"))
+    if "habilitado_comex" not in out.columns and "possui_habilitacao_comex" in out.columns:
+        out = out.with_columns(
+            pl.col("possui_habilitacao_comex").cast(pl.Utf8).alias("habilitado_comex")
+        )
+    if "divisao_cnae" not in out.columns:
+        out = out.with_columns(pl.lit("").cast(pl.Utf8).alias("divisao_cnae"))
+    if "situacao_cadastral_descricao" not in out.columns and "situacao_cadastral" in out.columns:
+        out = out.with_columns(pl.col("situacao_cadastral").cast(pl.Utf8).alias("situacao_cadastral_descricao"))
+    for col in EMPRESAS_SH4_COLS:
+        if col not in out.columns:
+            out = out.with_columns(pl.lit("").cast(pl.Utf8).alias(col))
+    return out.select(EMPRESAS_SH4_COLS)
 
 MESES = {
     1: "Janeiro",
@@ -574,6 +635,76 @@ def filter_df_ord_window(df: pl.DataFrame, ord_col: str, ord_lo: int, ord_hi: in
     return df.filter((pl.col(ord_col) >= ord_lo) & (pl.col(ord_col) <= ord_hi))
 
 
+def format_mes_curto(ano: int, mes: int) -> str:
+    """Ex.: Abr/25 — legível no celular."""
+    nome = MESES.get(int(mes), str(mes))
+    return f"{nome[:3]}/{int(ano) % 100:02d}"
+
+
+def list_ord_month_range(ord_lo: int, ord_hi: int) -> list[tuple[int, int, int, str]]:
+    """Lista (ano, mês, ord AAAAMM, rótulo curto) entre dois períodos inclusive."""
+    y, m = ord_lo // 100, ord_lo % 100
+    y_end, m_end = ord_hi // 100, ord_hi % 100
+    out: list[tuple[int, int, int, str]] = []
+    while (y, m) <= (y_end, m_end):
+        out.append((y, m, y * 100 + m, format_mes_curto(y, m)))
+        if m == 12:
+            y, m = y + 1, 1
+        else:
+            m += 1
+    return out
+
+
+def build_comparativo_municipios_12m(
+    caged_comp: pl.DataFrame,
+    municipios: list[str],
+    n_months: int = 12,
+) -> tuple[pl.DataFrame, int, int, list[str]]:
+    """
+    Grade completa município × mês (últimos n_months), saldo 0 se ausente.
+    Retorna dataframe, ord_lo, ord_hi e ordem dos rótulos no eixo X.
+    """
+    if caged_comp.is_empty():
+        return pl.DataFrame(), 0, 0, []
+    comp = caged_comp.with_columns(
+        (pl.col("ano_referencia") * 100 + pl.col("mes_referencia")).alias("ord_mes")
+    )
+    ord_max = int(comp.select(pl.max("ord_mes")).item())
+    ord_lo, ord_hi = ord_range_last_n(ord_max, n_months)
+    month_axis = list_ord_month_range(ord_lo, ord_hi)
+    if not month_axis:
+        return pl.DataFrame(), ord_lo, ord_hi, []
+    comp = filter_df_ord_window(comp, "ord_mes", ord_lo, ord_hi)
+    if municipios:
+        comp = comp.filter(pl.col("Municipio").cast(pl.Utf8).is_in(municipios))
+    comp = comp.with_columns(pl.col("Municipio").cast(pl.Utf8).str.strip_chars())
+    agg = (
+        comp.group_by(["ord_mes", "ano_referencia", "mes_referencia", "Municipio"])
+        .agg(pl.col("Saldo").cast(pl.Float64).fill_null(0).sum().alias("Saldo"))
+    )
+    munis = municipios or sorted(agg["Municipio"].unique().to_list())
+    grid_rows: list[dict[str, object]] = []
+    for y, m, om, lbl in month_axis:
+        for mun in munis:
+            grid_rows.append(
+                {
+                    "ano_referencia": y,
+                    "mes_referencia": m,
+                    "ord_mes": om,
+                    "Mês Curto": lbl,
+                    "Municipio": mun,
+                }
+            )
+    grid = pl.DataFrame(grid_rows)
+    out = (
+        grid.join(agg, on=["ord_mes", "ano_referencia", "mes_referencia", "Municipio"], how="left")
+        .with_columns(pl.col("Saldo").fill_null(0.0))
+        .sort(["ord_mes", "Municipio"])
+    )
+    labels = [t[3] for t in month_axis]
+    return out, ord_lo, ord_hi, labels
+
+
 def filter_monthly_period(monthly: pl.DataFrame, modo: str, ord_ref: int | None = None) -> pl.DataFrame:
     """Recorta série mensal CAGED conforme filtro de período."""
     if monthly.is_empty() or "ord_mes" not in monthly.columns:
@@ -957,44 +1088,20 @@ def empresas_botucatu_por_sh4(
         if "cnae_subclasse" in join_df.columns:
             cnae_cols.append(pl.col("cnae_subclasse").cast(pl.Utf8).str.replace_all(r"\D", "").fill_null(""))
         if cnae_cols:
-            chunks.append(join_df.filter(_cnae_match_expr(cnae_cols, prefs)))
+            chunks.append(_align_empresas_sh4_chunk(join_df.filter(_cnae_match_expr(cnae_cols, prefs))))
 
     if fato_df is not None and not fato_df.is_empty() and "sh4" in fato_df.columns:
         f = fato_df.filter(pl.col("sh4").cast(pl.Utf8).str.zfill(4) == sh4z)
         if not f.is_empty():
-            rename = {
-                "cnae_empresa": "cnae_fiscal_principal",
-                "tipo_cnae_match": "vinculo_cnae",
-                "motivo_relacao": "motivo_aproximacao",
-                "possui_habilitacao_comex": "habilitado_comex",
-            }
-            chunks.append(f.rename({k: v for k, v in rename.items() if k in f.columns}))
+            chunks.append(_align_empresas_sh4_chunk(f))
 
     if not chunks:
         return pl.DataFrame(), notas
 
     out = pl.concat(chunks, how="vertical_relaxed")
     if "cnpj" in out.columns:
-        out = out.with_columns(pl.col("cnpj").cast(pl.Utf8).str.replace_all(r"\D", "")).unique("cnpj", keep="first")
-    vis = [
-        c
-        for c in [
-            "cnpj",
-            "razao_social",
-            "cnae_fiscal_principal",
-            "cnae_subclasse",
-            "vinculo_cnae",
-            "divisao_cnae",
-            "divisao_descricao",
-            "tipo_empresa",
-            "porte_cadastral_descricao",
-            "situacao_cadastral_descricao",
-            "habilitado_comex",
-            "motivo_aproximacao",
-        ]
-        if c in out.columns
-    ]
-    return out.select(vis) if vis else out, notas
+        out = out.filter(pl.col("cnpj").str.len_chars() > 0).unique("cnpj", keep="first")
+    return out, notas
 
 
 def comex_sh4_select_labels(exp: pl.DataFrame, imp: pl.DataFrame, map_df: pl.DataFrame) -> dict[str, str]:
@@ -1309,6 +1416,16 @@ cnpj_porte_filtro = "Todos"
 
 with st.sidebar:
     st.markdown("### Menu")
+    interface_compacta = st.toggle(
+        "Interface compacta (celular)",
+        value=False,
+        help="Oculta textos explicativos longos; prioriza gráficos e tabelas.",
+    )
+    if interface_compacta:
+        st.markdown(
+            '<script>document.body.classList.add("compact-ui");</script>',
+            unsafe_allow_html=True,
+        )
     pagina = st.radio(
         "Seção",
         [
@@ -1397,13 +1514,6 @@ with st.sidebar:
 cnpj_join_filtered = apply_cnpj_filters(
     cnpj_join_raw, cnpj_situacoes_sel, cnpj_mei_filtro, cnpj_porte_filtro
 )
-
-ord_comp_max = max_ord_mes_df(caged_comp, "ano_referencia", "mes_referencia")
-if ord_comp_max is None and not caged.is_empty():
-    ord_comp_max = max_ord_mes_df(caged, "ano_referencia", "mes_referencia")
-if ord_comp_max is None:
-    ord_comp_max = ord_mes_from_parts(int(ano), int(month))
-ord_comp_lo, ord_comp_hi = ord_range_last_n(ord_comp_max, 12)
 
 if pagina == "Visão geral":
     st.markdown("## Resumo executivo")
@@ -1609,81 +1719,69 @@ elif pagina == "Emprego (CAGED)":
 
         if not caged_comp.is_empty():
             st.markdown("### Comparativo de saldo entre municípios")
-            st.caption(
-                "Saldo mensal = admissões − desligamentos por município. Sempre os **últimos 12 meses** "
-                "com dados na base comparativa; escolha os municípios na barra lateral."
+            comp_grid, ord_lo_c, ord_hi_c, x_labels = build_comparativo_municipios_12m(
+                caged_comp, cidades_selecionadas, n_months=12
             )
-            comp_12m = caged_comp.with_columns(
-                (pl.col("ano_referencia") * 100 + pl.col("mes_referencia")).alias("ord_mes")
-            )
-            comp_12m = filter_df_ord_window(comp_12m, "ord_mes", ord_comp_lo, ord_comp_hi)
-            if cidades_selecionadas:
-                comp_12m = comp_12m.filter(pl.col("Municipio").is_in(cidades_selecionadas))
-            comp_12m = comp_12m.with_columns(pl.col("Municipio").cast(pl.String).str.strip_chars())
-            comp_12m = comp_12m.with_columns(
-                pl.concat_str(
-                    [
-                        pl.col("mes_referencia").replace_strict(MESES),
-                        pl.lit("/"),
-                        pl.col("ano_referencia").cast(pl.String),
-                    ]
-                ).alias("Mês")
-            )
-            comp_12m = (
-                comp_12m.group_by(["ord_mes", "ano_referencia", "mes_referencia", "Municipio", "Mês"])
-                .agg(pl.col("Saldo").sum().alias("Saldo"))
-                .sort(["ord_mes", "Municipio"])
-            )
-            comp_pd = comp_12m.to_pandas()
+            if ord_lo_c and ord_hi_c:
+                y_lo, m_lo = ord_lo_c // 100, ord_lo_c % 100
+                y_hi, m_hi = ord_hi_c // 100, ord_hi_c % 100
+                st.caption(
+                    f"Saldo mensal (admissões − desligamentos). Janela: **{MESES[m_lo]}/{y_lo}** a "
+                    f"**{MESES[m_hi]}/{y_hi}** — 12 meses corridos. Municípios na barra lateral."
+                )
+            comp_pd = comp_grid.to_pandas() if not comp_grid.is_empty() else comp_grid
             if not comp_pd.empty:
                 comp_pd["Saldo"] = comp_pd["Saldo"].astype("float64")
-                tick_vals = sorted(comp_pd["ord_mes"].unique().tolist())
-                ord_to_lbl = comp_pd.drop_duplicates(subset=["ord_mes"]).set_index("ord_mes")["Mês"].to_dict()
-                tick_lbl = [str(ord_to_lbl.get(int(ov), ov)) for ov in tick_vals]
+                comp_pd["Saldo_BR"] = comp_pd["Saldo"].apply(lambda v: br_int(float(v)))
                 fig_comp = go.Figure()
-                palette = ["#636efa", "#ef553b", "#00cc96", "#ab63fa", "#ffa15a", "#19d3f3", "#ff6692", "#b6e880"]
+                palette = ["#2563eb", "#ea580c", "#16a34a", "#9333ea", "#ca8a04", "#0891b2", "#db2777", "#65a30d"]
                 for i, mun in enumerate(sorted(comp_pd["Municipio"].astype(str).unique())):
                     sub = comp_pd[comp_pd["Municipio"].astype(str) == str(mun)].sort_values("ord_mes").copy()
-                    xs = sub["ord_mes"].astype(int).tolist()
-                    ys = sub["Saldo"].astype(float).tolist()
-                    ms = sub["Mês"].astype(str).tolist()
                     trace_color = palette[i % len(palette)]
                     fig_comp.add_trace(
                         go.Scatter(
-                            x=xs,
-                            y=ys,
+                            x=sub["Mês Curto"].astype(str).tolist(),
+                            y=sub["Saldo"].astype(float).tolist(),
                             mode="lines+markers",
                             name=str(mun),
                             line=dict(width=2.5, color=trace_color),
-                            marker=dict(size=8, color=trace_color, line=dict(width=1, color="rgba(255,255,255,0.6)")),
-                            cliponaxis=False,
-                            customdata=ms,
-                            hovertemplate="<b>%{fullData.name}</b><br>%{customdata}<br>Saldo: %{y:.0f}<extra></extra>",
+                            marker=dict(size=7, color=trace_color),
+                            connectgaps=True,
+                            customdata=sub[["ano_referencia", "mes_referencia", "Saldo_BR"]].values,
+                            hovertemplate=(
+                                f"<b>{mun}</b><br>"
+                                "%{customdata[0]}/%{customdata[1]:02d}<br>"
+                                "Saldo: %{customdata[2]}<extra></extra>"
+                            ),
                         )
                     )
                 fig_comp.update_layout(
                     xaxis=dict(
-                        tickmode="array",
-                        tickvals=tick_vals,
-                        ticktext=tick_lbl,
-                        title="Mês",
+                        title="",
+                        type="category",
+                        categoryorder="array",
+                        categoryarray=x_labels,
+                        tickangle=-35 if len(x_labels) > 8 else 0,
                     ),
-                    yaxis=dict(title="Saldo líquido (admissões − desligamentos)"),
-                    hovermode="closest",
+                    yaxis=dict(title="Saldo líquido (vínculos/mês)", zeroline=True, zerolinewidth=1),
+                    hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.12, x=0, xanchor="left"),
+                    margin=dict(l=16, r=24, t=120, b=72),
                 )
-                fig_comp.update_xaxes(nticks=min(12, len(tick_vals)))
                 aplicar_layout_clean(fig_comp, unified_hover=False)
                 layout_chart(
                     fig_comp,
-                    "Comparativo de saldo entre municípios (últimos 12 meses)",
-                    legend_bottom=1.0,
-                    top_margin=108,
+                    "Saldo mensal por município",
+                    legend_bottom=1.14,
+                    top_margin=128,
                 )
                 plotly_mobile_friendly(fig_comp, key="pl_caged_comp")
                 st.download_button(
                     "Exportar — saldo por município e mês",
-                    data=csv_bytes_from_pandas(comp_pd[["ano_referencia", "mes_referencia", "Municipio", "Saldo"]]),
-                    file_name="caged_comparativo_municipios.csv",
+                    data=csv_bytes_from_pandas(
+                        comp_pd[["ano_referencia", "mes_referencia", "Municipio", "Saldo"]]
+                    ),
+                    file_name="caged_comparativo_municipios_12m.csv",
                     mime="text/csv",
                     key="dl_caged_comp",
                     width="stretch",
@@ -2465,9 +2563,8 @@ elif pagina == "Balança comercial (Comex)":
         )
 
         st.subheader("Rastreabilidade indicativa: SH4 → CNAE → empresas")
-        st.caption(
-            "Cruzamento **indicativo** entre os produtos que mais movimentam a balança comercial do município "
-            "e empresas de Botucatu cujo CNAE fiscal (principal ou secundário) é compatível com o produto (SH4). "
+        ui_caption(
+            "Cruzamento indicativo: produtos da balança × empresas de Botucatu com CNAE compatível (SH4). "
             "O Comex não informa CNPJ por produto."
         )
         tab_rast_ex, tab_rast_im, tab_rast_det = st.tabs(
@@ -2475,7 +2572,10 @@ elif pagina == "Balança comercial (Comex)":
         )
         with tab_rast_ex:
             rast_ex = comex_rastreabilidade_resumo(
-                comex_top_exp_raw, cnpj_join_raw, comex_sh4_cnae_map, fato_sh4_empresas_raw
+                comex_top_exp_raw,
+                cnpj_join_filtered if not cnpj_join_filtered.is_empty() else cnpj_join_raw,
+                comex_sh4_cnae_map,
+                fato_sh4_empresas_raw,
             )
             if rast_ex.is_empty():
                 st.info("Sem ranking de exportação ou cadastro CNPJ para cruzar.")
@@ -2494,7 +2594,10 @@ elif pagina == "Balança comercial (Comex)":
                 )
         with tab_rast_im:
             rast_im = comex_rastreabilidade_resumo(
-                comex_top_imp_raw, cnpj_join_raw, comex_sh4_cnae_map, fato_sh4_empresas_raw
+                comex_top_imp_raw,
+                cnpj_join_filtered if not cnpj_join_filtered.is_empty() else cnpj_join_raw,
+                comex_sh4_cnae_map,
+                fato_sh4_empresas_raw,
             )
             if rast_im.is_empty():
                 st.info("Sem ranking de importação ou cadastro CNPJ para cruzar.")
@@ -2514,7 +2617,7 @@ elif pagina == "Balança comercial (Comex)":
         with tab_rast_det:
             sh4_labels = comex_sh4_select_labels(comex_top_exp_raw, comex_top_imp_raw, comex_sh4_cnae_map)
             if not sh4_labels:
-                st.caption("Sem SH4 no ranking nem no catálogo de mapeamento.")
+                ui_caption("Sem SH4 no ranking nem no catálogo de mapeamento.")
             else:
                 sh4_pick = st.selectbox(
                     "SH4",
@@ -2527,14 +2630,15 @@ elif pagina == "Balança comercial (Comex)":
                 if submap.is_empty():
                     st.info("Este produto ainda não possui mapeamento CNAE no catálogo do observatório.")
                 else:
+                    join_comex = cnpj_join_filtered if not cnpj_join_filtered.is_empty() else cnpj_join_raw
                     emp_sh4, notas_map = empresas_botucatu_por_sh4(
-                        cnpj_join_raw, comex_sh4_cnae_map, sh4_pick, fato_df=fato_sh4_empresas_raw
+                        join_comex, comex_sh4_cnae_map, sh4_pick, fato_df=fato_sh4_empresas_raw
                     )
                     notas_txt = [str(n).strip() for n in notas_map if str(n).strip()]
                     crit_view = submap.select(
                         [c for c in ["cnae_prefix", "nota"] if c in submap.columns]
                     ).rename({"cnae_prefix": "Prefixo CNAE", "nota": "Descrição da atividade"})
-                    with st.expander("Critérios CNAE da aproximação", expanded=emp_sh4.is_empty()):
+                    with st.expander("Critérios CNAE da aproximação", expanded=False):
                         st.dataframe(crit_view, width="stretch", hide_index=True)
                         for n in notas_txt:
                             st.caption(n)
