@@ -220,6 +220,18 @@ O script cria o dataset se não existir e envia os principais CSVs + `README.md`
 
 **GitHub Actions manual:** workflow [Sync Hugging Face dataset](.github/workflows/hf-sync.yml) (`workflow_dispatch`) — só o upload, sem rodar o pipeline completo; opcionalmente altere o input `hf_repo`.
 
+## Hugging Face Space (painel Streamlit)
+
+O painel em [observatorio-botucatu](https://huggingface.co/spaces/cauanalima/observatorio-botucatu) lê os CSVs do **repositório do Space**, não do dataset automaticamente.
+
+1. Atualize o dataset: `python scripts/sync_hf_dataset.py`
+2. Publique no Space: `python scripts/sync_hf_space.py`  
+   - `HF_SPACE_REPO` (padrão: `{usuario}/observatorio-botucatu`)  
+   - `--from-dataset` baixa do `HF_DATASET_REPO` o que faltar localmente antes do upload  
+   - `--dry-run` lista arquivos sem enviar
+
+Após o upload, o Space recompila sozinho; use **Restart** se métricas antigas persistirem (cache `@st.cache_data`).
+
 ## Observações de atualização mensal
 
 Como o MVP usa arquivos estáticos, para atualizar os dados:
