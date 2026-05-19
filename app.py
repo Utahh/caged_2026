@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 import polars as pl
 import streamlit as st
 
-st.set_page_config(layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(layout="wide", initial_sidebar_state="expanded")
 
 st.markdown(
     """
@@ -451,6 +451,56 @@ def plotly_mobile_friendly(fig, *, key: str, **kwargs) -> None:
     )
 
 
+def ord_mes_from_parts(ano: int, mes: int) -> int:
+    return int(ano) * 12 + int(mes)
+
+
+def ord_range_last_n(ord_max: int, n: int = 12) -> tuple[int, int]:
+    return int(ord_max) - int(n) + 1, int(ord_max)
+
+
+def max_ord_mes_df(df: pl.DataFrame, ano_col: str, mes_col: str) -> int | None:
+    if df.is_empty():
+        return None
+    return int(df.select((pl.col(ano_col) * 12 + pl.col(mes_col)).max()).item())
+
+
+def filter_df_ord_window(df: pl.DataFrame, ord_col: str, ord_lo: int, ord_hi: int) -> pl.DataFrame:
+    if df.is_empty() or ord_col not in df.columns:
+        return df
+    return df.filter((pl.col(ord_col) >= ord_lo) & (pl.col(ord_col) <= ord_hi))
+
+
+def filter_monthly_period(monthly: pl.DataFrame, modo: str, ord_ref: int | None = None) -> pl.DataFrame:
+    """Recorta série mensal CAGED conforme filtro de período."""
+    if monthly.is_empty() or "ord_mes" not in monthly.columns:
+        return monthly
+    ord_max = int(monthly.select(pl.max("ord_mes")).item()) if ord_ref is None else int(ord_ref)
+    if modo == "Últimos 12 meses":
+        lo, hi = ord_range_last_n(ord_max, 12)
+        return monthly.filter((pl.col("ord_mes") >= lo) & (pl.col("ord_mes") <= hi))
+    if modo == "Últimos 24 meses":
+        lo, hi = ord_range_last_n(ord_max, 24)
+        return monthly.filter((pl.col("ord_mes") >= lo) & (pl.col("ord_mes") <= hi))
+    return monthly
+
+
+def layout_chart(fig, title: str, *, legend_bottom: float = 1.02, top_margin: int = 96) -> None:
+    """Título e legenda separados (evita sobreposição no desktop e no celular)."""
+    fig.update_layout(
+        title=dict(text=title, x=0, xanchor="left", y=0.99, yanchor="top", font=dict(size=16)),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=legend_bottom,
+            x=0,
+            xanchor="left",
+            traceorder="normal",
+        ),
+        margin=dict(l=16, r=56, t=top_margin, b=56),
+    )
+
+
 def processar_kpis_financeiros(
     df_fin: pl.DataFrame, mes_atual: int, ano_atual: int, instituicao_filtro: str = "Todas"
 ) -> tuple[dict, pl.DataFrame, pl.DataFrame]:
@@ -492,12 +542,14 @@ def processar_kpis_financeiros(
         .sort(["Ano", "Mes"])
     )
     tot_mes_valid = tot_mes.filter(pl.col("Saldo_Total") > 0)
+    ano_ref = int(ano_atual)
+    mes_ref = int(mes_atual)
     if not tot_mes_valid.is_empty():
         ultimo = tot_mes_valid.tail(1)
-        ano_atual = int(ultimo.row(0)[0])
-        mes_atual = int(ultimo.row(0)[1])
+        ano_ref = int(ultimo.row(0)[0])
+        mes_ref = int(ultimo.row(0)[1])
 
-    atual = base.filter((pl.col("Ano") == ano_atual) & (pl.col("Mes") == mes_atual))
+    atual = base.filter((pl.col("Ano") == ano_ref) & (pl.col("Mes") == mes_ref))
     if instituicao_filtro != "Todas":
         atual = atual.filter(pl.col("Instituicao") == instituicao_filtro)
     total_dinheiro = float(atual.select(pl.col("Saldo_em_Reais").sum()).item() or 0.0)
@@ -506,7 +558,7 @@ def processar_kpis_financeiros(
     )
 
     distribuicao_bancos = (
-        base.filter((pl.col("Ano") == ano_atual) & (pl.col("Mes") == mes_atual))
+        base.filter((pl.col("Ano") == ano_ref) & (pl.col("Mes") == mes_ref))
         .group_by("Instituicao")
         .agg(pl.col("Saldo_em_Reais").sum().alias("Total"))
         .sort("Total", descending=True)
@@ -517,7 +569,7 @@ def processar_kpis_financeiros(
         else (str(distribuicao_bancos.row(0)[0]) if not distribuicao_bancos.is_empty() else "Sem dados")
     )
 
-    ord_atual = ano_atual * 12 + mes_atual
+    ord_atual = ord_mes_from_parts(ano_ref, mes_ref)
     evolucao_12_meses = (
         base
         .filter((pl.col("ord_mes") >= ord_atual - 11) & (pl.col("ord_mes") <= ord_atual))
@@ -531,8 +583,8 @@ def processar_kpis_financeiros(
         "total_dinheiro": total_dinheiro,
         "total_poupanca": total_poupanca,
         "instituicao_top_1": instituicao_top_1,
-        "mes_atual": mes_atual,
-        "ano_atual": ano_atual,
+        "mes_atual": mes_ref,
+        "ano_atual": ano_ref,
     }
     return kpis, evolucao_12_meses, distribuicao_bancos
 
@@ -1092,53 +1144,117 @@ caged_comp = (
     else caged_comp_raw
 )
 
-st.title("CAGED e finanças municipais")
+st.title("Observatório Econômico — Botucatu")
 
-menu_l, menu_r = st.columns([9, 1])
-with menu_l:
-    with st.popover("Filtros e período"):
-        anos_disponiveis = (
-            sorted(caged.select(pl.col("ano_referencia").unique()).to_series().drop_nulls().to_list())
-            if not caged.is_empty() and "ano_referencia" in caged.columns
-            else [2026]
-        )
-        ano = st.selectbox("Ano", anos_disponiveis, index=len(anos_disponiveis) - 1)
-        month = st.selectbox("Mês", list(range(1, 13)), format_func=lambda m: MESES[m], index=2)
-        grupos = (
-            ["Todos"] + sorted(caged.select(pl.col("Grande Grupo").unique()).to_series().drop_nulls().to_list())
-            if not caged.is_empty()
-            else ["Todos"]
-        )
-        grupo = st.selectbox("Atividade Econômica", grupos, index=0)
-        cidades_base = ["Botucatu", "Salto", "Jaú", "Sertãozinho", "Tatuí"]
-        cidades_disponiveis = (
-            sorted(caged_comp.select(pl.col("Municipio").unique()).to_series().drop_nulls().to_list())
-            if not caged_comp.is_empty()
-            else cidades_base
-        )
-        cidades_default = [c for c in cidades_base if c in cidades_disponiveis] or cidades_disponiveis
-        cidades_selecionadas = st.multiselect(
-            "Municípios (Comparativo Saldo CAGED)",
-            options=cidades_disponiveis,
-            default=cidades_default,
-        )
-with menu_r:
-    st.empty()
+with st.sidebar:
+    st.markdown("### Menu")
+    pagina = st.radio(
+        "Seção",
+        [
+            "Visão geral",
+            "Emprego (CAGED)",
+            "Empresas (CNPJ / MEI)",
+            "Finanças (Siconfi)",
+            "Balança comercial (Comex)",
+        ],
+        label_visibility="collapsed",
+    )
+    st.divider()
+    st.markdown("### Filtros")
+    anos_disponiveis = (
+        sorted(caged.select(pl.col("ano_referencia").unique()).to_series().drop_nulls().to_list())
+        if not caged.is_empty() and "ano_referencia" in caged.columns
+        else [2026]
+    )
+    ano = st.selectbox("Competência — ano", anos_disponiveis, index=len(anos_disponiveis) - 1)
+    month = st.selectbox("Competência — mês", list(range(1, 13)), format_func=lambda m: MESES[m], index=2)
+    periodo_graficos = st.selectbox(
+        "Período nos gráficos (CAGED)",
+        ["Últimos 12 meses", "Últimos 24 meses", "Série completa"],
+        index=0,
+    )
+    grupos = (
+        ["Todos"] + sorted(caged.select(pl.col("Grande Grupo").unique()).to_series().drop_nulls().to_list())
+        if not caged.is_empty()
+        else ["Todos"]
+    )
+    grupo = st.selectbox("Atividade econômica", grupos, index=0)
+    cidades_base = ["Botucatu", "Salto", "Jaú", "Sertãozinho", "Tatuí"]
+    cidades_disponiveis = (
+        sorted(caged_comp.select(pl.col("Municipio").unique()).to_series().drop_nulls().to_list())
+        if not caged_comp.is_empty()
+        else cidades_base
+    )
+    cidades_default = [c for c in cidades_base if c in cidades_disponiveis] or cidades_disponiveis
+    cidades_selecionadas = st.multiselect(
+        "Municípios no comparativo",
+        options=cidades_disponiveis,
+        default=cidades_default,
+    )
+    st.caption(
+        "Competência: KPIs do mês. Período nos gráficos: janela da série mensal e do comparativo entre municípios."
+    )
 
-st.caption(
-    "Popover **Filtros e período**: aplica-se ao **Painel municipal** (CAGED e comparativo), à aba **Finanças da Prefeitura** "
-    "(mesma competência mês/ano) e às seções que leem esse recorte. "
-    "A aba **Balança comercial** usa só a série Comex do CSV."
-)
-st.caption(
-    "Em telas pequenas, a página rola com prioridade; o menu de ferramentas dos gráficos fica discreto (canto, ao passar o dedo)."
-)
+ord_comp_max = max_ord_mes_df(caged_comp, "ano_referencia", "mes_referencia")
+if ord_comp_max is None and not caged.is_empty():
+    ord_comp_max = max_ord_mes_df(caged, "ano_referencia", "mes_referencia")
+if ord_comp_max is None:
+    ord_comp_max = ord_mes_from_parts(int(ano), int(month))
+ord_comp_lo, ord_comp_hi = ord_range_last_n(ord_comp_max, 12)
 
-nav_painel, nav_pref, nav_comex = st.tabs(
-    ["Painel municipal", "Finanças da Prefeitura (Siconfi)", "Balança comercial (Comex)"]
-)
+if pagina == "Visão geral":
+    st.markdown("## Resumo executivo")
+    st.caption(f"Competência principal: **{MESES[month]}/{ano}**. Use o menu para análises detalhadas.")
+    o1, o2, o3, o4 = st.columns(4)
+    if not caged.is_empty():
+        c_ov = caged.filter((pl.col("ano_referencia") == ano) & (pl.col("mes_referencia") == month))
+        if grupo != "Todos":
+            c_ov = c_ov.filter(pl.col("Grande Grupo") == grupo)
+        adm_o, des_o, sal_o = caged_volume_admissoes_desligamentos(c_ov)
+        o1.metric("Admissões (Botucatu)", br_int(adm_o))
+        o2.metric("Desligamentos", br_int(des_o))
+        o3.metric("Saldo líquido", br_int(sal_o))
+        mf = caged_build_monthly_series(caged if grupo == "Todos" else caged.filter(pl.col("Grande Grupo") == grupo))
+        if not mf.is_empty():
+            o4.metric("Estoque acumulado (último mês)", br_int(float(mf["Estoque"][-1])))
+    else:
+        o1.metric("CAGED", "—")
+    if has_cnpj_data and not cnpj_resumo_raw.is_empty():
+        rs_o = cnpj_resumo_raw.to_dicts()[0]
+        st.markdown("### Empresas e MEI")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Empresas", br_int(float(rs_o.get("total_empresas", 0) or 0)))
+        c2.metric("MEI ativos", br_int(float(rs_o.get("mei_ativos", 0) or 0)))
+        c3.metric("Estabelecimentos", br_int(float(rs_o.get("total_estabelecimentos", 0) or 0)))
+    if not fin.is_empty():
+        vf_o, vrf_o, vtot_o = sum_prefeitura_fundos_e_renda_fixa(fin, month, ano)
+        st.markdown("### Finanças da Prefeitura")
+        f1, f2 = st.columns(2)
+        f1.metric("Fundos + renda fixa", format_brl_full(vtot_o) if vtot_o == vtot_o else "—")
+        f2.metric("Fundos (conta pública)", format_brl_full(vf_o) if vf_o == vf_o else "—")
+    if has_comex:
+        cm_o = comex_mensal_raw.sort("ord_mes")
+        mo = int(cm_o.select(pl.max("ord_mes")).item())
+        exp_o = float(
+            cm_o.filter((pl.col("ord_mes") == mo) & (pl.col("fluxo") == "exportacao"))
+            .select(pl.col("valor_usd_fob").sum())
+            .item()
+            or 0
+        )
+        imp_o = float(
+            cm_o.filter((pl.col("ord_mes") == mo) & (pl.col("fluxo") == "importacao"))
+            .select(pl.col("valor_usd_fob").sum())
+            .item()
+            or 0
+        )
+        st.markdown("### Comércio exterior")
+        x1, x2, x3 = st.columns(3)
+        x1.metric("Exportação (US$)", format_usd_milhoes(exp_o))
+        x2.metric("Importação (US$)", format_usd_milhoes(imp_o))
+        x3.metric("Saldo (US$)", format_usd_milhoes(exp_o - imp_o))
+    st.info("Selecione uma seção no menu à esquerda (ou no topo no celular) para gráficos e tabelas completos.")
 
-with nav_painel:
+elif pagina == "Emprego (CAGED)":
     st.caption(f"Painel — recorte selecionado: **{MESES[month]}/{ano}**.")
     if not caged.is_empty():
         st.markdown("## Emprego formal (CAGED)")
@@ -1171,7 +1287,7 @@ with nav_painel:
             c_series = c_series.filter(pl.col("Grande Grupo") == grupo)
 
         monthly_full = caged_build_monthly_series(c_series)
-        monthly = monthly_full
+        monthly = filter_monthly_period(monthly_full, periodo_graficos)
         if not monthly.is_empty():
             est_ini = float(monthly["Estoque"][0])
             est_fim = float(monthly["Estoque"][-1])
@@ -1204,50 +1320,30 @@ with nav_painel:
 
         st.markdown("### Evolução mensal — admissões, desligamentos e estoque")
         st.caption(
-            "Série completa disponível no observatório. **Estoque** é o saldo acumulado mês a mês desde o primeiro "
-            "período da série (leitura alinhada ao Novo CAGED municipal)."
-        )
-        tbl_mensal = monthly.select(["Mês", "Admissões", "Desligamentos", "Saldo", "Estoque"])
-        st.dataframe(
-            tbl_mensal.with_columns(
-                [
-                    pl.col("Admissões").round(0).cast(pl.Int64),
-                    pl.col("Desligamentos").round(0).cast(pl.Int64),
-                    pl.col("Saldo").round(0).cast(pl.Int64),
-                    pl.col("Estoque").round(0).cast(pl.Int64),
-                ]
-            ),
-            width="stretch",
-            height=min(420, 80 + 35 * max(tbl_mensal.height, 4)),
-            hide_index=True,
+            f"Recorte: **{periodo_graficos}**. **Estoque** = saldo acumulado desde o início da série municipal "
+            "(Novo CAGED). Exporte os dados pelo botão abaixo do gráfico."
         )
         fig_line = go.Figure()
         fig_line.add_trace(
             go.Scatter(
                 x=monthly_pd["Mês Curto"],
                 y=monthly_pd["Admissões"],
-                mode="lines+markers+text",
-                name="Admissões",
-                line=dict(color="#2563eb", width=3),
+                mode="lines+markers",
+                name="Admissões (mês)",
+                line=dict(color="#2563eb", width=2.5),
                 customdata=monthly_pd[["Mês", "Admissões_BR"]].values,
-                hovertemplate="%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
-                text=monthly_pd["Admissões_BR"],
-                textposition="top center",
-                textfont=dict(size=10),
+                hovertemplate="<b>Admissões</b><br>%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
             )
         )
         fig_line.add_trace(
             go.Scatter(
                 x=monthly_pd["Mês Curto"],
                 y=monthly_pd["Desligamentos"],
-                mode="lines+markers+text",
-                name="Desligamentos",
-                line=dict(color="#1e3a8a", width=3),
+                mode="lines+markers",
+                name="Desligamentos (mês)",
+                line=dict(color="#ea580c", width=2.5),
                 customdata=monthly_pd[["Mês", "Desligamentos_BR"]].values,
-                hovertemplate="%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
-                text=monthly_pd["Desligamentos_BR"],
-                textposition="bottom center",
-                textfont=dict(size=10),
+                hovertemplate="<b>Desligamentos</b><br>%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
             )
         )
         fig_line.add_trace(
@@ -1255,21 +1351,21 @@ with nav_painel:
                 x=monthly_pd["Mês Curto"],
                 y=monthly_pd["Estoque"],
                 mode="lines+markers",
-                name="Estoque (acum.)",
+                name="Estoque acumulado",
                 line=dict(color="#16a34a", width=2, dash="dot"),
                 yaxis="y2",
                 customdata=monthly_pd[["Mês", "Estoque_BR"]].values,
-                hovertemplate="%{customdata[0]}<br>Estoque: %{customdata[1]}<extra></extra>",
+                hovertemplate="<b>Estoque acumulado</b><br>%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
             )
         )
         fig_line.update_layout(
-            title="Admissões, desligamentos e estoque acumulado",
-            legend=dict(orientation="h", yanchor="bottom", y=1.08, x=0),
-            yaxis=dict(title="Admissões / Desligamentos"),
-            yaxis2=dict(title="Estoque", overlaying="y", side="right", showgrid=False),
+            yaxis=dict(title="Admissões e desligamentos (vínculos/mês)"),
+            yaxis2=dict(title="Estoque acumulado", overlaying="y", side="right", showgrid=False),
+            hovermode="x unified",
         )
-        fig_line.update_xaxes(nticks=min(24, max(6, monthly_pd.shape[0] // 3)), tickangle=-45)
+        fig_line.update_xaxes(nticks=min(12, max(6, monthly_pd.shape[0])), tickangle=-40)
         aplicar_layout_clean(fig_line, unified_hover=True)
+        layout_chart(fig_line, "Admissões, desligamentos e estoque acumulado", legend_bottom=1.0, top_margin=108)
         plotly_mobile_friendly(fig_line, key="pl_caged_line")
         st.download_button(
             "Exportar evolução mensal",
@@ -1280,15 +1376,20 @@ with nav_painel:
             width="stretch",
         )
 
-        fig_bar = px.bar(monthly_pd, x="Mês Curto", y="Saldo", title="Evolução do Saldo Mensal", text="Saldo_BR")
-        fig_bar.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
+        fig_bar = px.bar(
+            monthly_pd,
+            x="Mês Curto",
+            y="Saldo",
+            labels={"Saldo": "Saldo líquido", "Mês Curto": "Mês"},
+        )
         fig_bar.update_traces(
+            name="Saldo líquido (mês)",
             customdata=monthly_pd[["Mês", "Saldo_BR"]].values,
-            hovertemplate="%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
-            textposition="outside",
+            hovertemplate="<b>Saldo líquido</b><br>%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
             cliponaxis=False,
         )
         aplicar_layout_clean(fig_bar)
+        layout_chart(fig_bar, "Saldo líquido mensal (admissões − desligamentos)")
         plotly_mobile_friendly(fig_bar, key="pl_caged_bar")
         st.download_button(
             "Exportar — saldo mensal (CAGED)",
@@ -1302,12 +1403,11 @@ with nav_painel:
         if not caged_comp.is_empty():
             st.markdown("### Comparativo de saldo entre municípios")
             st.caption(
-                "Saldo mensal = admissões − desligamentos (CAGED), por município do **recorte** do pipeline. "
-                "No gráfico do Plotly, evite o modo **“Compare data on hover”** (ícone de alinhamento no canto do gráfico): "
-                "ele repete o mesmo valor para todas as linhas no eixo X. Aqui o botão foi removido da barra de ferramentas."
+                "Saldo mensal = admissões − desligamentos por município. Sempre os **últimos 12 meses** "
+                "com dados na base comparativa; escolha os municípios na barra lateral."
             )
             comp_12m = caged_comp.with_columns((pl.col("ano_referencia") * 12 + pl.col("mes_referencia")).alias("ord_mes"))
-            comp_12m = comp_12m.filter((pl.col("ord_mes") >= ord_atual - 11) & (pl.col("ord_mes") <= ord_atual))
+            comp_12m = filter_df_ord_window(comp_12m, "ord_mes", ord_comp_lo, ord_comp_hi)
             if cidades_selecionadas:
                 comp_12m = comp_12m.filter(pl.col("Municipio").is_in(cidades_selecionadas))
             comp_12m = comp_12m.with_columns(pl.col("Municipio").cast(pl.String).str.strip_chars())
@@ -1353,19 +1453,23 @@ with nav_painel:
                         )
                     )
                 fig_comp.update_layout(
-                    title="Evolução de Saldo por Município (12 meses)",
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     xaxis=dict(
                         tickmode="array",
                         tickvals=tick_vals,
                         ticktext=tick_lbl,
                         title="Mês",
                     ),
-                    yaxis=dict(title="Saldo (admissões − desligamentos)"),
+                    yaxis=dict(title="Saldo líquido (admissões − desligamentos)"),
                     hovermode="closest",
                 )
                 fig_comp.update_xaxes(nticks=min(12, len(tick_vals)))
                 aplicar_layout_clean(fig_comp, unified_hover=False)
+                layout_chart(
+                    fig_comp,
+                    "Comparativo de saldo entre municípios (últimos 12 meses)",
+                    legend_bottom=1.0,
+                    top_margin=108,
+                )
                 plotly_mobile_friendly(fig_comp, key="pl_caged_comp")
                 st.download_button(
                     "Exportar — saldo por município e mês",
@@ -1477,9 +1581,11 @@ with nav_painel:
             key="dl_caged_cnae_rank",
             width="stretch",
         )
+    else:
+        st.warning("Dados CAGED indisponíveis. Execute o pipeline de atualização do observatório.")
 
+elif pagina == "Empresas (CNPJ / MEI)":
     if has_cnpj_file or not cnpj_join_raw.is_empty():
-        st.divider()
         st.header("Cadastro CNPJ e MEI (Botucatu)")
         st.caption(
             "Empresas com ao menos um estabelecimento no município (IBGE 3507506). "
@@ -1700,9 +1806,11 @@ with nav_painel:
                 )
             else:
                 st.info("Cadastro detalhado por empresa indisponível. Ative a extração de CNPJ no pipeline do observatório.")
+    else:
+        st.info("Dados de CNPJ/MEI indisponíveis. Execute a atualização no pipeline do observatório.")
 
 
-with nav_pref:
+elif pagina == "Finanças (Siconfi)":
     st.header("Finanças da Prefeitura (Siconfi)")
     st.caption(
         f"Recorte do popover: **{MESES[month]}/{ano}**. "
@@ -1792,6 +1900,7 @@ with nav_pref:
                     fig_evo.update_xaxes(showgrid=False, nticks=6)
                     fig_evo.update_yaxes(showgrid=False)
                     aplicar_layout_clean(fig_evo, unified_hover=True)
+                    layout_chart(fig_evo, "Evolução do saldo — últimos 12 meses")
                     st.markdown("#### Evolução do saldo (12 meses)")
                     plotly_mobile_friendly(fig_evo, key="pl_fin_evo")
                     st.download_button(
@@ -1860,7 +1969,7 @@ with nav_pref:
         st.error(f"Não foi possível renderizar a Visão Financeira e Liquidez: {exc}")
 
 
-with nav_comex:
+elif pagina == "Balança comercial (Comex)":
     st.header("Balança comercial (Comex Stat / MDIC)")
     st.caption(
         "Série mensal municipal (declarante), FOB em US$; R$ estimado = US$ × PTAX (BCB). "
@@ -1961,6 +2070,8 @@ with nav_comex:
             pl.col("valor_brl_estimado").alias("import_brl"),
         )
         chart_df = exp_side.join(imp_side, on="ord_mes", how="inner").sort("ord_mes")
+        lo_comex, hi_comex = ord_range_last_n(max_ord, 12)
+        chart_df = filter_df_ord_window(chart_df, "ord_mes", lo_comex, hi_comex)
         chart_df = chart_df.with_columns(
             (pl.col("ano").cast(pl.Utf8) + "-" + pl.col("mes").cast(pl.Utf8).str.zfill(2)).alias("periodo")
         )
@@ -2043,22 +2154,11 @@ with nav_comex:
             hovermode="closest",
         )
         aplicar_layout_clean(fig_comex, unified_hover=False)
-        fig_comex.update_layout(
-            title=dict(
-                text="Histórico mensal — US$ (export/import) e PTAX (eixo direito)",
-                x=0.02,
-                xanchor="left",
-                yanchor="top",
-                y=1.0,
-            ),
-            legend=dict(
-                orientation="h",
-                yanchor="top",
-                y=-0.2,
-                xanchor="center",
-                x=0.5,
-            ),
-            margin=dict(l=16, r=56, t=56, b=100),
+        layout_chart(
+            fig_comex,
+            "Comex — exportação, importação (US$) e PTAX (últimos 12 meses)",
+            legend_bottom=1.0,
+            top_margin=108,
         )
         plotly_mobile_friendly(fig_comex, key="comex_usd_ptax")
 
@@ -2092,23 +2192,7 @@ with nav_comex:
             hovermode="closest",
         )
         aplicar_layout_clean(fig_brl, unified_hover=False)
-        fig_brl.update_layout(
-            title=dict(
-                text="Histórico mensal — valores estimados em R$ (US$ × PTAX do mês)",
-                x=0.02,
-                xanchor="left",
-                yanchor="top",
-                y=1.0,
-            ),
-            legend=dict(
-                orientation="h",
-                yanchor="top",
-                y=-0.14,
-                xanchor="center",
-                x=0.5,
-            ),
-            margin=dict(l=16, r=56, t=56, b=92),
-        )
+        layout_chart(fig_brl, "Comex — valores estimados em R$ (últimos 12 meses)")
         plotly_mobile_friendly(fig_brl, key="comex_brl")
 
         def _fmt_cell_usd_tbl(v: object) -> str:
