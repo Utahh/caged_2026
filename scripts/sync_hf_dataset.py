@@ -35,6 +35,7 @@ DEFAULT_FILES = [
     "cnpj_botucatu_porte_pct.csv",
     "cnpj_botucatu_cnae_x_tipo.csv",
     "data/comex_sh4_cnae_aproximacao.csv",
+    "data/caged_estoque_referencia.csv",
 ]
 
 # Opcionais (após pipeline / staging CAGED)

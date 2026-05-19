@@ -69,9 +69,9 @@ st.markdown(
         }
         @media (max-width: 768px) {
             .block-container {
-                padding-left: 0.75rem !important;
-                padding-right: 0.75rem !important;
-                padding-top: 0.75rem !important;
+                padding-left: 0.65rem !important;
+                padding-right: 0.65rem !important;
+                padding-top: 0.65rem !important;
             }
             div[data-testid="column"] {
                 width: 100% !important;
@@ -80,11 +80,19 @@ st.markdown(
                 min-width: 100% !important;
             }
             div[data-testid="stMetric"] {
-                min-height: 104px;
+                min-height: 96px;
+                margin-bottom: 0.35rem;
             }
             div[data-testid="stMetricValue"] {
-                font-size: clamp(1.2rem, 6.2vw, 1.9rem) !important;
+                font-size: clamp(1.15rem, 5.5vw, 1.75rem) !important;
             }
+            section[data-testid="stSidebar"] {
+                min-width: min(100vw, 20rem);
+            }
+            [data-testid="stPlotlyChart"] {
+                min-height: 280px;
+            }
+            .mobile-hide-table .stDataFrame { display: none; }
         }
     </style>
     """,
@@ -112,6 +120,18 @@ def br_int(v: float) -> str:
     return f"{v:,.0f}".replace(",", ".")
 
 
+def br_pct(v: float, decimals: int = 1) -> str:
+    if v != v:
+        return "—"
+    return f"{v:.{decimals}f}%".replace(".", ",")
+
+
+def br_pct_from_counts(qtd: int, tot: int, decimals: int = 1) -> str:
+    if tot <= 0:
+        return "—"
+    return br_pct(100.0 * qtd / tot, decimals)
+
+
 def br_money(v: float) -> str:
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
@@ -122,12 +142,98 @@ def mom(atual: float, anterior: float) -> float:
     return ((atual - anterior) / abs(anterior)) * 100
 
 
-def caged_build_monthly_series(df: pl.DataFrame) -> pl.DataFrame:
-    """
-    Série mensal com admissões, desligamentos, saldo e estoque acumulado.
+def ord_mes_from_parts(ano: int, mes: int) -> int:
+    """Ordenação cronológica AAAAMM (ex.: mar/2026 → 202603)."""
+    return int(ano) * 100 + int(mes)
 
-    Estoque = soma acumulada do saldo líquido mensal desde o primeiro mês da série
-  (leitura alinhada aos painéis municipais do Novo CAGED).
+
+def ym_add_months(ano: int, mes: int, delta: int) -> tuple[int, int]:
+    t = int(ano) * 12 + int(mes) - 1 + int(delta)
+    return t // 12, t % 12 + 1
+
+
+def ord_range_last_n(ord_max: int, n: int = 12) -> tuple[int, int]:
+    y, m = ord_max // 100, ord_max % 100
+    y_lo, m_lo = ym_add_months(y, m, -(n - 1))
+    return y_lo * 100 + m_lo, ord_max
+
+
+def max_ord_mes_df(df: pl.DataFrame, ano_col: str, mes_col: str) -> int | None:
+    if df.is_empty():
+        return None
+    return int(df.select((pl.col(ano_col) * 100 + pl.col(mes_col)).max()).item())
+
+
+def load_caged_estoque_referencia(root: Path) -> tuple[int, float, str] | None:
+    """Âncora oficial (portal): estoque de vínculos em um mês de referência."""
+    import os
+
+    env = os.environ.get("CAGED_ESTOQUE_REF", "").strip()
+    if env and ":" in env:
+        # 2026-03:48309
+        ym, val = env.split(":", 1)
+        y, m = ym.split("-")
+        return ord_mes_from_parts(int(y), int(m)), float(val), "variável CAGED_ESTOQUE_REF"
+
+    for rel in ("data/caged_estoque_referencia.csv", "caged_estoque_referencia.csv"):
+        p = root / rel
+        if not p.is_file():
+            continue
+        ref = pl.read_csv(p, separator=";")
+        if ref.is_empty():
+            continue
+        row = ref.tail(1)
+        y = int(row["ano_referencia"][0])
+        m = int(row["mes_referencia"][0])
+        est = float(row["estoque"][0])
+        fonte = str(row["fonte"][0]) if "fonte" in row.columns else rel
+        return ord_mes_from_parts(y, m), est, fonte
+    return None
+
+
+def caged_expand_monthly_grid(monthly: pl.DataFrame) -> pl.DataFrame:
+    """Meses sem movimento no FTP entram com saldo zero (série contínua)."""
+    if monthly.is_empty():
+        return monthly
+    lo = int(monthly.select(pl.min("ord_mes")).item())
+    hi = int(monthly.select(pl.max("ord_mes")).item())
+    y, m = lo // 100, lo % 100
+    y_end, m_end = hi // 100, hi % 100
+    keys: list[tuple[int, int, int]] = []
+    while (y, m) <= (y_end, m_end):
+        keys.append((y, m, y * 100 + m))
+        if m == 12:
+            y += 1
+            m = 1
+        else:
+            m += 1
+    grid = pl.DataFrame(
+        {
+            "ano_referencia": [t[0] for t in keys],
+            "mes_referencia": [t[1] for t in keys],
+            "ord_mes": [t[2] for t in keys],
+        }
+    )
+    return (
+        grid.join(monthly, on=["ano_referencia", "mes_referencia", "ord_mes"], how="left")
+        .with_columns(
+            [
+                pl.col("Admissões").fill_null(0),
+                pl.col("Desligamentos").fill_null(0),
+                pl.col("Saldo").fill_null(0),
+            ]
+        )
+        .sort("ord_mes")
+    )
+
+
+def caged_build_monthly_series(
+    df: pl.DataFrame,
+    estoque_ref: tuple[int, float, str] | None = None,
+) -> pl.DataFrame:
+    """
+    Série mensal CAGED. Estoque de vínculos (portal):
+    estoque[m] = base + Σ saldo até m; base calibrada pela referência oficial quando disponível.
     """
     if df.is_empty():
         return pl.DataFrame(
@@ -152,9 +258,20 @@ def caged_build_monthly_series(df: pl.DataFrame) -> pl.DataFrame:
             ]
         )
         .sort(["ano_referencia", "mes_referencia"])
-        .with_columns((pl.col("ano_referencia") * 12 + pl.col("mes_referencia")).alias("ord_mes"))
-        .with_columns(pl.col("Saldo").cum_sum().alias("Estoque"))
+        .with_columns(
+            (pl.col("ano_referencia") * 100 + pl.col("mes_referencia")).alias("ord_mes")
+        )
     )
+    monthly = caged_expand_monthly_grid(monthly)
+    monthly = monthly.with_columns(pl.col("Saldo").cum_sum().alias("_saldo_acum"))
+    base = 0.0
+    if estoque_ref:
+        ord_ref, est_ref, _ = estoque_ref
+        hit = monthly.filter(pl.col("ord_mes") == ord_ref)
+        if not hit.is_empty():
+            saldo_acum_ref = float(hit["_saldo_acum"][0])
+            base = float(est_ref) - saldo_acum_ref
+    monthly = monthly.with_columns((base + pl.col("_saldo_acum")).alias("Estoque")).drop("_saldo_acum")
     monthly = monthly.with_columns(
         pl.concat_str(
             [
@@ -451,20 +568,6 @@ def plotly_mobile_friendly(fig, *, key: str, **kwargs) -> None:
     )
 
 
-def ord_mes_from_parts(ano: int, mes: int) -> int:
-    return int(ano) * 12 + int(mes)
-
-
-def ord_range_last_n(ord_max: int, n: int = 12) -> tuple[int, int]:
-    return int(ord_max) - int(n) + 1, int(ord_max)
-
-
-def max_ord_mes_df(df: pl.DataFrame, ano_col: str, mes_col: str) -> int | None:
-    if df.is_empty():
-        return None
-    return int(df.select((pl.col(ano_col) * 12 + pl.col(mes_col)).max()).item())
-
-
 def filter_df_ord_window(df: pl.DataFrame, ord_col: str, ord_lo: int, ord_hi: int) -> pl.DataFrame:
     if df.is_empty() or ord_col not in df.columns:
         return df
@@ -533,8 +636,8 @@ def processar_kpis_financeiros(
 
     # Evita referência futura: nunca passar do mês/ano corrente.
     hoje = date.today()
-    ord_hoje = hoje.year * 12 + hoje.month
-    base = base.with_columns((pl.col("Ano") * 12 + pl.col("Mes")).alias("ord_mes")).filter(pl.col("ord_mes") <= ord_hoje)
+    ord_hoje = ord_mes_from_parts(hoje.year, hoje.month)
+    base = base.with_columns((pl.col("Ano") * 100 + pl.col("Mes")).alias("ord_mes")).filter(pl.col("ord_mes") <= ord_hoje)
 
     tot_mes = (
         base.group_by(["Ano", "Mes"])
@@ -768,7 +871,7 @@ def load_comex_botucatu() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.
                     pl.col("valor_brl_estimado").cast(pl.Float64).fill_null(0.0),
                 ]
             )
-            .with_columns((pl.col("ano") * 12 + pl.col("mes")).alias("ord_mes"))
+            .with_columns((pl.col("ano") * 100 + pl.col("mes")).alias("ord_mes"))
         )
     return meta, men, top_e, top_i
 
@@ -979,10 +1082,9 @@ def build_setor_macro_from_join(join_df: pl.DataFrame) -> pl.DataFrame:
         .group_by("macro_setor")
         .len()
         .rename({"len": "quantidade"})
-        .with_columns((100.0 * pl.col("quantidade") / tot).round(2).alias("percentual"))
         .sort("quantidade", descending=True)
     )
-    return agg
+    return _with_percentual_col(agg, "quantidade")
 
 
 def build_porte_from_join(join_df: pl.DataFrame) -> pl.DataFrame:
@@ -996,13 +1098,65 @@ def build_porte_from_join(join_df: pl.DataFrame) -> pl.DataFrame:
     else:
         return pl.DataFrame()
     tot = join_df.height
-    return (
+    if tot == 0:
+        return pl.DataFrame()
+    out = (
         join_df.group_by(col)
         .len()
         .rename({"len": "quantidade", col: "tipo_empresa"})
-        .with_columns((100.0 * pl.col("quantidade") / tot).round(2).alias("percentual"))
         .sort("quantidade", descending=True)
     )
+    return _with_percentual_col(out, "quantidade")
+
+
+def _with_percentual_col(df: pl.DataFrame, qtd_col: str) -> pl.DataFrame:
+    tot = float(df[qtd_col].sum()) if not df.is_empty() else 0.0
+    if tot <= 0:
+        return df.with_columns(pl.lit(0.0).alias("percentual"))
+    return df.with_columns((100.0 * pl.col(qtd_col) / tot).round(2).alias("percentual"))
+
+
+def _join_flag_true(col: str) -> pl.Expr:
+    return pl.col(col).cast(pl.Utf8).str.strip_chars().str.to_lowercase().is_in(
+        ["1", "true", "s", "sim", "yes", "y"]
+    )
+
+
+def cnpj_situacao_options(join_df: pl.DataFrame) -> list[str]:
+    if join_df.is_empty() or "situacao_cadastral_descricao" not in join_df.columns:
+        return ["Ativa"]
+    vals = (
+        join_df.select(pl.col("situacao_cadastral_descricao").cast(pl.Utf8).str.strip_chars())
+        .unique()
+        .to_series()
+        .to_list()
+    )
+    opts = sorted({str(v) for v in vals if v and str(v).strip()})
+    return opts or ["Ativa"]
+
+
+def apply_cnpj_filters(
+    join_df: pl.DataFrame,
+    situacoes: list[str],
+    mei_filtro: str,
+    porte_filtro: str,
+) -> pl.DataFrame:
+    if join_df.is_empty():
+        return join_df
+    out = join_df
+    if situacoes and "situacao_cadastral_descricao" in out.columns:
+        out = out.filter(pl.col("situacao_cadastral_descricao").cast(pl.Utf8).is_in(situacoes))
+    if mei_filtro == "MEI ativo" and "mei_ativo" in out.columns:
+        out = out.filter(_join_flag_true("mei_ativo"))
+    elif mei_filtro == "MEI inativo no CNPJ" and "mei_inativo_cnpj" in out.columns:
+        out = out.filter(_join_flag_true("mei_inativo_cnpj"))
+    elif mei_filtro == "Com opção MEI (Simples)" and "mei_simples_vigente" in out.columns:
+        out = out.filter(_join_flag_true("mei_simples_vigente"))
+    elif mei_filtro == "Sem MEI" and "mei_simples_vigente" in out.columns:
+        out = out.filter(~_join_flag_true("mei_simples_vigente"))
+    if porte_filtro != "Todos" and "tipo_empresa" in out.columns:
+        out = out.filter(pl.col("tipo_empresa").cast(pl.Utf8) == porte_filtro)
+    return out
 
 
 def normalize_caged(df: pl.DataFrame) -> pl.DataFrame:
@@ -1144,7 +1298,14 @@ caged_comp = (
     else caged_comp_raw
 )
 
+APP_ROOT = Path(__file__).resolve().parent
+estoque_ref = load_caged_estoque_referencia(APP_ROOT)
+
 st.title("Observatório Econômico — Botucatu")
+
+cnpj_situacoes_sel: list[str] = ["Ativa"]
+cnpj_mei_filtro = "Todos"
+cnpj_porte_filtro = "Todos"
 
 with st.sidebar:
     st.markdown("### Menu")
@@ -1194,6 +1355,48 @@ with st.sidebar:
     st.caption(
         "Competência: KPIs do mês. Período nos gráficos: janela da série mensal e do comparativo entre municípios."
     )
+    if estoque_ref:
+        oy, om = estoque_ref[0] // 100, estoque_ref[0] % 100
+        st.caption(
+            f"Estoque CAGED calibrado com referência **{MESES.get(om, om)}/{oy}** "
+            f"({br_int(estoque_ref[1])} vínculos — {estoque_ref[2]})."
+        )
+    with st.expander("CNPJ / MEI", expanded=(pagina == "Empresas (CNPJ / MEI)")):
+        sit_opts = cnpj_situacao_options(cnpj_join_raw)
+        default_sit = [s for s in ["Ativa"] if s in sit_opts] or sit_opts[:1]
+        cnpj_situacoes_sel = st.multiselect(
+            "Situação cadastral",
+            options=sit_opts,
+            default=default_sit,
+            help="Situação do estabelecimento representante no município (RFB).",
+        )
+        cnpj_mei_filtro = st.selectbox(
+            "Situação MEI",
+            [
+                "Todos",
+                "MEI ativo",
+                "MEI inativo no CNPJ",
+                "Com opção MEI (Simples)",
+                "Sem MEI",
+            ],
+            index=0,
+        )
+        porte_opts = ["Todos"]
+        if not cnpj_join_raw.is_empty() and "tipo_empresa" in cnpj_join_raw.columns:
+            porte_opts += sorted(cnpj_join_raw["tipo_empresa"].unique().to_list())
+        cnpj_porte_filtro = st.selectbox("Tipo / porte", porte_opts, index=0)
+        if not cnpj_resumo_raw.is_empty():
+            rs_side = cnpj_resumo_raw.to_dicts()[0]
+            ref_ext = rs_side.get("ref_data_extracao", "")
+            if ref_ext:
+                st.caption(
+                    f"Extração Receita: **{ref_ext}**. MEI pode mudar diariamente na RFB; "
+                    "reexecute o ETL CNPJ para atualizar."
+                )
+
+cnpj_join_filtered = apply_cnpj_filters(
+    cnpj_join_raw, cnpj_situacoes_sel, cnpj_mei_filtro, cnpj_porte_filtro
+)
 
 ord_comp_max = max_ord_mes_df(caged_comp, "ano_referencia", "mes_referencia")
 if ord_comp_max is None and not caged.is_empty():
@@ -1214,9 +1417,12 @@ if pagina == "Visão geral":
         o1.metric("Admissões (Botucatu)", br_int(adm_o))
         o2.metric("Desligamentos", br_int(des_o))
         o3.metric("Saldo líquido", br_int(sal_o))
-        mf = caged_build_monthly_series(caged if grupo == "Todos" else caged.filter(pl.col("Grande Grupo") == grupo))
+        mf = caged_build_monthly_series(
+            caged if grupo == "Todos" else caged.filter(pl.col("Grande Grupo") == grupo),
+            estoque_ref=estoque_ref,
+        )
         if not mf.is_empty():
-            o4.metric("Estoque acumulado (último mês)", br_int(float(mf["Estoque"][-1])))
+            o4.metric("Estoque de vínculos (último mês)", br_int(float(mf["Estoque"][-1])))
     else:
         o1.metric("CAGED", "—")
     if has_cnpj_data and not cnpj_resumo_raw.is_empty():
@@ -1286,7 +1492,7 @@ elif pagina == "Emprego (CAGED)":
         if grupo != "Todos":
             c_series = c_series.filter(pl.col("Grande Grupo") == grupo)
 
-        monthly_full = caged_build_monthly_series(c_series)
+        monthly_full = caged_build_monthly_series(c_series, estoque_ref=estoque_ref)
         monthly = filter_monthly_period(monthly_full, periodo_graficos)
         if not monthly.is_empty():
             est_ini = float(monthly["Estoque"][0])
@@ -1294,19 +1500,19 @@ elif pagina == "Emprego (CAGED)":
             var_est = est_fim - est_ini
             e1, e2, e3 = st.columns(3)
             e1.metric(
-                "Estoque acumulado (início da série)",
+                "Estoque (início do recorte)",
                 br_int(est_ini),
-                help="Primeiro mês disponível no observatório municipal.",
+                help="Vínculos formais no primeiro mês exibido (após calibração com o portal).",
             )
             e2.metric(
-                "Estoque acumulado (último mês)",
+                "Estoque (último mês)",
                 br_int(est_fim),
-                help="Soma dos saldos líquidos mês a mês até o período mais recente.",
+                help="Estoque[m] = estoque[m−1] + saldo[m], alinhado ao Novo CAGED municipal.",
             )
             e3.metric(
-                "Crescimento do estoque na série",
+                "Variação do estoque no recorte",
                 br_int(var_est),
-                f"{(100.0 * var_est / abs(est_ini)) if est_ini else 0:+.1f}% vs. início",
+                f"{(100.0 * var_est / abs(est_ini)) if est_ini else 0:+.1f}% vs. início do recorte",
             )
         monthly_pd = monthly.to_pandas()
         monthly_pd["Mês Curto"] = monthly_pd.apply(
@@ -1320,8 +1526,9 @@ elif pagina == "Emprego (CAGED)":
 
         st.markdown("### Evolução mensal — admissões, desligamentos e estoque")
         st.caption(
-            f"Recorte: **{periodo_graficos}**. **Estoque** = saldo acumulado desde o início da série municipal "
-            "(Novo CAGED). Exporte os dados pelo botão abaixo do gráfico."
+            f"Recorte: **{periodo_graficos}**. **Estoque** = vínculos formais; a cada mês soma-se o **saldo líquido** "
+            f"(admissões − desligamentos). Referência calibrada com o portal quando disponível. "
+            "Exporte pelo botão abaixo."
         )
         fig_line = go.Figure()
         fig_line.add_trace(
@@ -1351,21 +1558,21 @@ elif pagina == "Emprego (CAGED)":
                 x=monthly_pd["Mês Curto"],
                 y=monthly_pd["Estoque"],
                 mode="lines+markers",
-                name="Estoque acumulado",
+                name="Estoque de vínculos",
                 line=dict(color="#16a34a", width=2, dash="dot"),
                 yaxis="y2",
                 customdata=monthly_pd[["Mês", "Estoque_BR"]].values,
-                hovertemplate="<b>Estoque acumulado</b><br>%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
+                hovertemplate="<b>Estoque de vínculos</b><br>%{customdata[0]}<br>%{customdata[1]}<extra></extra>",
             )
         )
         fig_line.update_layout(
             yaxis=dict(title="Admissões e desligamentos (vínculos/mês)"),
-            yaxis2=dict(title="Estoque acumulado", overlaying="y", side="right", showgrid=False),
+            yaxis2=dict(title="Estoque de vínculos", overlaying="y", side="right", showgrid=False),
             hovermode="x unified",
         )
         fig_line.update_xaxes(nticks=min(12, max(6, monthly_pd.shape[0])), tickangle=-40)
         aplicar_layout_clean(fig_line, unified_hover=True)
-        layout_chart(fig_line, "Admissões, desligamentos e estoque acumulado", legend_bottom=1.0, top_margin=108)
+        layout_chart(fig_line, "Admissões, desligamentos e estoque de vínculos", legend_bottom=1.0, top_margin=108)
         plotly_mobile_friendly(fig_line, key="pl_caged_line")
         st.download_button(
             "Exportar evolução mensal",
@@ -1406,7 +1613,9 @@ elif pagina == "Emprego (CAGED)":
                 "Saldo mensal = admissões − desligamentos por município. Sempre os **últimos 12 meses** "
                 "com dados na base comparativa; escolha os municípios na barra lateral."
             )
-            comp_12m = caged_comp.with_columns((pl.col("ano_referencia") * 12 + pl.col("mes_referencia")).alias("ord_mes"))
+            comp_12m = caged_comp.with_columns(
+                (pl.col("ano_referencia") * 100 + pl.col("mes_referencia")).alias("ord_mes")
+            )
             comp_12m = filter_df_ord_window(comp_12m, "ord_mes", ord_comp_lo, ord_comp_hi)
             if cidades_selecionadas:
                 comp_12m = comp_12m.filter(pl.col("Municipio").is_in(cidades_selecionadas))
@@ -1589,7 +1798,7 @@ elif pagina == "Empresas (CNPJ / MEI)":
         st.header("Cadastro CNPJ e MEI (Botucatu)")
         st.caption(
             "Empresas com ao menos um estabelecimento no município (IBGE 3507506). "
-            "MEI: opção pelo Simples sem data de exclusão; ativo/inativo conforme situação cadastral do estabelecimento representativo."
+            "Filtros de situação e MEI na barra lateral. MEI: opção pelo Simples; ativo/inativo conforme situação cadastral."
         )
         if not has_cnpj_data:
             st.warning(
@@ -1600,9 +1809,19 @@ elif pagina == "Empresas (CNPJ / MEI)":
         if rs:
             st.caption(f"Referência da base: **{rs.get('ref_data_extracao', '')}** · Fonte: Receita Federal (dados abertos CNPJ).")
 
-        tot_e = float(rs.get("total_empresas", 0) or 0) if rs else float(cnpj_join_raw.height)
-        mei_any = float(rs.get("mei_opcao_sem_exclusao", 0) or 0) if rs else 0.0
-        if tot_e > 0 and mei_any == 0:
+        jf = cnpj_join_filtered
+        tot_e = float(jf.height)
+        mei_any = float(jf.filter(_join_flag_true("mei_simples_vigente")).height) if "mei_simples_vigente" in jf.columns else 0.0
+        mei_at = float(jf.filter(_join_flag_true("mei_ativo")).height) if "mei_ativo" in jf.columns else 0.0
+        mei_in = float(jf.filter(_join_flag_true("mei_inativo_cnpj")).height) if "mei_inativo_cnpj" in jf.columns else 0.0
+        if tot_e == 0:
+            st.info("Nenhuma empresa no recorte atual. Ajuste situação cadastral ou filtros MEI na barra lateral.")
+        filtros_txt = ", ".join(cnpj_situacoes_sel) if cnpj_situacoes_sel else "todas situações"
+        st.caption(
+            f"Recorte: **{br_int(tot_e)}** empresas · situação: {filtros_txt} · MEI: **{cnpj_mei_filtro}** · "
+            f"porte: **{cnpj_porte_filtro}**."
+        )
+        if tot_e > 0 and mei_any == 0 and cnpj_mei_filtro == "Todos":
             st.warning(
                 "MEI zerado com empresas encontradas: em geral a competência dos dados abertos não coincide com o Simples "
                 "ou o mês ainda não foi publicado no portal da Receita Federal. "
@@ -1644,15 +1863,14 @@ elif pagina == "Empresas (CNPJ / MEI)":
 """
                 )
 
-            m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Empresas (raiz CNPJ)", br_int(tot_e))
-            m2.metric(
-                "Estabelecimentos no município",
-                br_int(float(rs.get("total_estabelecimentos", 0) or 0) if rs else cnpj_join_raw.height),
-            )
-            m3.metric("MEI ativos", br_int(float(rs.get("mei_ativos", 0) or 0) if rs else 0))
-            m4.metric("MEI inativos (CNPJ)", br_int(float(rs.get("mei_inativos_cnpj", 0) or 0) if rs else 0))
-            m5.metric("MEI no Simples (sem exclusão)", br_int(mei_any))
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Empresas no recorte", br_int(tot_e))
+            m2.metric("MEI ativos", br_int(mei_at))
+            m3.metric("MEI inativos (CNPJ)", br_int(mei_in))
+            m4.metric("MEI no Simples (sem exclusão)", br_int(mei_any))
+            if rs and tot_e > 0:
+                pct_mei = 100.0 * mei_at / tot_e
+                st.caption(f"MEI ativos = **{br_pct(pct_mei)}** do recorte filtrado (total municipal sem filtro: {br_int(float(rs.get('total_empresas', 0) or 0))}).")
 
             if not cnpj_mei_raw.is_empty():
                 st.markdown("### Movimento MEI (opção e exclusão no Simples)")
@@ -1679,8 +1897,8 @@ elif pagina == "Empresas (CNPJ / MEI)":
             else:
                 st.info("Sem série mensal de MEI (arquivo vazio ou não gerado).")
 
-            setor_df = cnpj_setor_raw if not cnpj_setor_raw.is_empty() else build_setor_macro_from_join(cnpj_join_raw)
-            porte_df = cnpj_porte_raw if not cnpj_porte_raw.is_empty() else build_porte_from_join(cnpj_join_raw)
+            setor_df = build_setor_macro_from_join(jf)
+            porte_df = build_porte_from_join(jf)
 
             if not setor_df.is_empty():
                 st.markdown("### Estrutura econômica do município (macrosetores)")
@@ -1689,7 +1907,7 @@ elif pagina == "Empresas (CNPJ / MEI)":
                     "a partir da divisão CNAE 2.0 do estabelecimento representativo."
                 )
                 sp = setor_df.to_pandas()
-                sp["pct_label"] = sp["percentual"].map(lambda x: f"{float(x):.1f}%".replace(".", ","))
+                sp["pct_label"] = sp["percentual"].map(lambda x: br_pct(float(x)))
                 c_left, c_right = st.columns(2)
                 with c_left:
                     fig_setor = px.pie(
@@ -1723,7 +1941,9 @@ elif pagina == "Empresas (CNPJ / MEI)":
                 st.markdown("### Participação por porte (MEI, ME, EPP e demais)")
                 st.caption("Percentual sobre o total de empresas (raiz) com estabelecimento em Botucatu.")
                 pp = porte_df.to_pandas()
-                pp["pct_label"] = pp["percentual"].map(lambda x: f"{float(x):.1f}%".replace(".", ","))
+                pp["pct_label"] = pp["percentual"].map(lambda x: br_pct(float(x)))
+                soma_pct = float(pp["percentual"].sum())
+                st.caption(f"Soma das participações no recorte: **{br_pct(soma_pct, 2)}** ({len(pp)} categorias).")
                 fig_pie = px.bar(
                     pp.sort_values("quantidade", ascending=True),
                     x="quantidade",
@@ -1754,7 +1974,7 @@ elif pagina == "Empresas (CNPJ / MEI)":
                 sub = cnpj_cnae_raw.filter(pl.col("tipo_empresa") == tipo_sel).head(15)
                 if not sub.is_empty():
                     cnae_pd = sub.to_pandas()
-                    cnae_pd["pct_txt"] = cnae_pd["percentual_no_tipo"].map(lambda x: f"{float(x):.1f}%".replace(".", ","))
+                    cnae_pd["pct_txt"] = cnae_pd["percentual_no_tipo"].map(lambda x: br_pct(float(x)))
                     fig_c = px.bar(
                         cnae_pd,
                         x="quantidade",
@@ -1791,14 +2011,14 @@ elif pagina == "Empresas (CNPJ / MEI)":
                 "Representante: estabelecimento no município escolhido por `cnpj_basico` (prioriza matriz). "
                 "Inclui porte, CNAE, situação cadastral, quantidade de estabelecimentos no município e flags MEI."
             )
-            if not cnpj_join_raw.is_empty():
-                njoin = cnpj_join_raw.height
-                prev_n = min(2000, njoin)
-                st.caption(f"Pré-visualização: **{prev_n}** de **{njoin}** registros (exportação completa no botão abaixo).")
-                st.dataframe(cnpj_join_raw.head(prev_n), width="stretch", height=420)
+            if not jf.is_empty():
+                njoin = jf.height
+                prev_n = min(500 if tot_e > 800 else 2000, njoin)
+                st.caption(f"Pré-visualização: **{prev_n}** de **{njoin}** no recorte filtrado.")
+                st.dataframe(jf.head(prev_n), width="stretch", height=min(420, 120 + 32 * min(prev_n, 12)))
                 st.download_button(
-                    "Exportar cadastro por empresa",
-                    data=csv_bytes_from_pandas(cnpj_join_raw.to_pandas()),
+                    "Exportar cadastro por empresa (recorte)",
+                    data=csv_bytes_from_pandas(jf.to_pandas()),
                     file_name="cnpj_botucatu_join_empresas.csv",
                     mime="text/csv",
                     key="dl_cnpj_join",
