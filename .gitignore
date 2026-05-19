@@ -29,6 +29,7 @@ data/caged_staging/exec_meta.json
 # Validação local CAGED
 caged_validacao_jan2026.txt
 caged_validacao_serie.txt
+data/processed/*.parquet
 
 # Pipeline temporários / probes locais
 tmp_pipeline_botucatu/

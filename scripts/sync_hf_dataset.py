@@ -41,6 +41,10 @@ DEFAULT_FILES = [
 OPTIONAL_FILES = [
     ("data/caged_staging/exec_meta.json", "metadata/exec_meta.json"),
     ("data/processed/fato_sh4_empresas_botucatu.csv", "data/processed/fato_sh4_empresas_botucatu.csv"),
+    ("cnpj_botucatu_join_empresas.csv", "cnpj_botucatu_join_empresas.csv"),
+    ("cnpj_botucatu_setor_macro.csv", "cnpj_botucatu_setor_macro.csv"),
+    ("cnpj_botucatu_meis.csv", "cnpj_botucatu_meis.csv"),
+    ("cnpj_botucatu_municipio_fonte.csv", "cnpj_botucatu_municipio_fonte.csv"),
 ]
 
 

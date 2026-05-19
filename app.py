@@ -1,6 +1,7 @@
 from pathlib import Path
 import base64
 import io
+import re
 from datetime import date, timedelta
 
 import fitz
@@ -121,13 +122,12 @@ def mom(atual: float, anterior: float) -> float:
     return ((atual - anterior) / abs(anterior)) * 100
 
 
-def caged_build_monthly_series(df: pl.DataFrame, *, estoque_min_volume_mes: float = 500.0) -> pl.DataFrame:
+def caged_build_monthly_series(df: pl.DataFrame) -> pl.DataFrame:
     """
     Série mensal com admissões, desligamentos, saldo e estoque acumulado.
 
-    Estoque: Σ saldo líquido mensal a partir do primeiro mês com volume típico municipal
-    (adm+des ≥ estoque_min_volume_mes), para alinhar ao Novo CAGED / Power BI e ignorar
-    fragmentos esparsos anteriores à série contínua no microdado.
+    Estoque = soma acumulada do saldo líquido mensal desde o primeiro mês da série
+  (leitura alinhada aos painéis municipais do Novo CAGED).
     """
     if df.is_empty():
         return pl.DataFrame(
@@ -153,17 +153,9 @@ def caged_build_monthly_series(df: pl.DataFrame, *, estoque_min_volume_mes: floa
         )
         .sort(["ano_referencia", "mes_referencia"])
         .with_columns((pl.col("ano_referencia") * 12 + pl.col("mes_referencia")).alias("ord_mes"))
+        .with_columns(pl.col("Saldo").cum_sum().alias("Estoque"))
     )
-    vol = pl.col("Admissões") + pl.col("Desligamentos")
-    start_ord = monthly.filter(vol >= estoque_min_volume_mes).select(pl.col("ord_mes").min()).item()
-    if start_ord is None:
-        est = monthly.select(pl.col("ord_mes"), pl.col("Saldo").cum_sum().alias("Estoque"))
-    else:
-        est = (
-            monthly.filter(pl.col("ord_mes") >= start_ord)
-            .select(pl.col("ord_mes"), pl.col("Saldo").cum_sum().alias("Estoque"))
-        )
-    monthly = monthly.join(est, on="ord_mes", how="left").with_columns(
+    monthly = monthly.with_columns(
         pl.concat_str(
             [
                 pl.col("mes_referencia").replace_strict(MESES),
@@ -691,6 +683,16 @@ def load_cnpj_botucatu() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.D
 
 
 @st.cache_data
+def load_cnpj_setor_macro() -> pl.DataFrame:
+    root = Path(__file__).resolve().parent
+    data_dir = root / "data"
+    p = path_exist(
+        [root / "cnpj_botucatu_setor_macro.csv", data_dir / "cnpj_botucatu_setor_macro.csv"]
+    )
+    return pl.read_csv(p, separator=";") if p else pl.DataFrame()
+
+
+@st.cache_data
 def load_comex_botucatu() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     root = Path(__file__).resolve().parent
     data_dir = root / "data"
@@ -720,8 +722,25 @@ def load_comex_botucatu() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.
 
 
 @st.cache_data
+def load_fato_sh4_empresas() -> pl.DataFrame:
+    """Fato SH4 × empresa (pipeline de rastreabilidade), quando disponível."""
+    root = Path(__file__).resolve().parent
+    p = path_exist(
+        [
+            root / "data" / "processed" / "fato_sh4_empresas_botucatu.csv",
+            root / "data" / "processed" / "fato_sh4_empresas_botucatu.parquet",
+        ]
+    )
+    if not p:
+        return pl.DataFrame()
+    if p.suffix.lower() == ".parquet":
+        return pl.read_parquet(p)
+    return pl.read_csv(p, separator=";", truncate_ragged_lines=True, infer_schema_length=5000)
+
+
+@st.cache_data
 def load_comex_sh4_cnae_map() -> pl.DataFrame:
-    """Mapeamento heurístico SH4 → prefixo(s) de CNAE fiscal (subclasse); arquivo editável em data/."""
+    """Mapeamento heurístico SH4 → prefixo(s) de CNAE fiscal (subclasse)."""
     root = Path(__file__).resolve().parent
     data_dir = root / "data"
     p = path_exist(
@@ -747,9 +766,24 @@ def load_comex_sh4_cnae_map() -> pl.DataFrame:
     )
 
 
-def empresas_botucatu_por_sh4(join_df: pl.DataFrame, map_df: pl.DataFrame, sh4: str) -> tuple[pl.DataFrame, list[str]]:
-    """Filtra empresas do join municipal cujo CNAE fiscal principal começa com algum prefixo mapeado ao SH4."""
-    if join_df.is_empty() or map_df.is_empty():
+def _cnae_match_expr(cols: list[pl.Expr], prefs: list[str]) -> pl.Expr:
+    if not prefs:
+        return pl.lit(False)
+    parts: list[pl.Expr] = []
+    for col in cols:
+        for p in prefs:
+            parts.append(col.str.starts_with(p))
+    return pl.any_horizontal(parts)
+
+
+def empresas_botucatu_por_sh4(
+    join_df: pl.DataFrame,
+    map_df: pl.DataFrame,
+    sh4: str,
+    fato_df: pl.DataFrame | None = None,
+) -> tuple[pl.DataFrame, list[str]]:
+    """Empresas em Botucatu com CNAE compatível ao SH4 (cadastro municipal e rastreabilidade)."""
+    if map_df.is_empty():
         return pl.DataFrame(), []
     sh4z = str(sh4).strip().zfill(4)
     sub_m = map_df.filter(pl.col("sh4") == sh4z)
@@ -758,11 +792,35 @@ def empresas_botucatu_por_sh4(join_df: pl.DataFrame, map_df: pl.DataFrame, sh4: 
     prefs = [str(p) for p in prefs if p]
     if not prefs:
         return pl.DataFrame(), notas
-    if "cnae_fiscal_principal" not in join_df.columns:
+    chunks: list[pl.DataFrame] = []
+    if not join_df.is_empty():
+        cnae_cols: list[pl.Expr] = []
+        if "cnae_fiscal_principal" in join_df.columns:
+            cnae_cols.append(
+                pl.col("cnae_fiscal_principal").cast(pl.Utf8).str.replace_all(r"\D", "").fill_null("")
+            )
+        if "cnae_subclasse" in join_df.columns:
+            cnae_cols.append(pl.col("cnae_subclasse").cast(pl.Utf8).str.replace_all(r"\D", "").fill_null(""))
+        if cnae_cols:
+            chunks.append(join_df.filter(_cnae_match_expr(cnae_cols, prefs)))
+
+    if fato_df is not None and not fato_df.is_empty() and "sh4" in fato_df.columns:
+        f = fato_df.filter(pl.col("sh4").cast(pl.Utf8).str.zfill(4) == sh4z)
+        if not f.is_empty():
+            rename = {
+                "cnae_empresa": "cnae_fiscal_principal",
+                "tipo_cnae_match": "vinculo_cnae",
+                "motivo_relacao": "motivo_aproximacao",
+                "possui_habilitacao_comex": "habilitado_comex",
+            }
+            chunks.append(f.rename({k: v for k, v in rename.items() if k in f.columns}))
+
+    if not chunks:
         return pl.DataFrame(), notas
-    ac = pl.col("cnae_fiscal_principal").cast(pl.Utf8).str.strip_chars().fill_null("")
-    or_expr = pl.any_horizontal(*[ac.str.starts_with(p) for p in prefs])
-    out = join_df.filter(or_expr)
+
+    out = pl.concat(chunks, how="vertical_relaxed")
+    if "cnpj" in out.columns:
+        out = out.with_columns(pl.col("cnpj").cast(pl.Utf8).str.replace_all(r"\D", "")).unique("cnpj", keep="first")
     vis = [
         c
         for c in [
@@ -770,11 +828,14 @@ def empresas_botucatu_por_sh4(join_df: pl.DataFrame, map_df: pl.DataFrame, sh4: 
             "razao_social",
             "cnae_fiscal_principal",
             "cnae_subclasse",
+            "vinculo_cnae",
             "divisao_cnae",
             "divisao_descricao",
             "tipo_empresa",
             "porte_cadastral_descricao",
             "situacao_cadastral_descricao",
+            "habilitado_comex",
+            "motivo_aproximacao",
         ]
         if c in out.columns
     ]
@@ -782,29 +843,114 @@ def empresas_botucatu_por_sh4(join_df: pl.DataFrame, map_df: pl.DataFrame, sh4: 
 
 
 def comex_sh4_select_labels(exp: pl.DataFrame, imp: pl.DataFrame, map_df: pl.DataFrame) -> dict[str, str]:
-    labels: dict[str, str] = {}
+    desc_por_sh4: dict[str, str] = {}
+    if not map_df.is_empty() and "sh4" in map_df.columns:
+        for row in map_df.select(["sh4", "nota"]).iter_rows(named=False):
+            k = str(row[0]).strip().zfill(4)
+            n = str(row[1] or "").strip()
+            if k:
+                desc_por_sh4[k] = n or desc_por_sh4.get(k, "")
     for frame in (exp, imp):
         if frame.is_empty() or "sh4" not in frame.columns:
             continue
         for row in frame.select(["sh4", "descricao"]).iter_rows(named=False):
-            sh4 = str(row[0]).strip().zfill(4)
-            desc = str(row[1] or "").strip()
-            if sh4 not in labels:
-                labels[sh4] = desc
-    nota_por_sh4: dict[str, str] = {}
-    if not map_df.is_empty() and "sh4" in map_df.columns and "nota" in map_df.columns:
-        for row in map_df.select(["sh4", "nota"]).iter_rows(named=False):
             k = str(row[0]).strip().zfill(4)
-            n = str(row[1] or "").strip()
-            if k and k not in nota_por_sh4 and n:
-                nota_por_sh4[k] = n
-    out_labels: dict[str, str] = {}
-    for k in sorted(set(labels) | set(nota_por_sh4)):
-        desc = (labels.get(k) or "").strip()
-        if not desc:
-            desc = nota_por_sh4.get(k, "SH4 (mapeamento aproximado)")
-        out_labels[k] = f"{k} — {desc[:78]}{'…' if len(desc) > 78 else ''}"
-    return out_labels
+            d = str(row[1] or "").strip()
+            if k and d and (k not in desc_por_sh4 or not desc_por_sh4[k]):
+                desc_por_sh4[k] = d
+    return {
+        k: f"{k} — {(desc_por_sh4[k] or 'Produto na NCM (SH4)')[:78]}{'…' if len(desc_por_sh4[k] or '') > 78 else ''}"
+        for k in sorted(desc_por_sh4)
+    }
+
+
+def macro_setor_from_divisao(divisao: object) -> str:
+    """Agro, Indústria, Comércio, Serviços, Saúde (divisão CNAE 2.0)."""
+    d = re.sub(r"\D", "", str(divisao or ""))
+    if not d:
+        return "Outros"
+    n = int(d[:2]) if len(d) >= 2 else int(d.zfill(2))
+    if 1 <= n <= 3:
+        return "Agropecuária"
+    if 5 <= n <= 43:
+        return "Indústria"
+    if 45 <= n <= 47:
+        return "Comércio"
+    if n == 86:
+        return "Saúde"
+    if 49 <= n <= 99:
+        return "Serviços"
+    return "Outros"
+
+
+def comex_rastreabilidade_resumo(
+    top_df: pl.DataFrame,
+    join_df: pl.DataFrame,
+    map_df: pl.DataFrame,
+    fato_df: pl.DataFrame | None = None,
+) -> pl.DataFrame:
+    """Para cada SH4 do ranking Comex, conta empresas municipais via SH4→CNAE→CNPJ."""
+    if top_df.is_empty():
+        return pl.DataFrame()
+    rows: list[dict[str, object]] = []
+    for r in top_df.iter_rows(named=True):
+        sh4 = str(r.get("sh4", "")).strip().zfill(4)
+        emp, _ = empresas_botucatu_por_sh4(join_df, map_df, sh4, fato_df=fato_df)
+        n_prefs = 0
+        if not map_df.is_empty() and "sh4" in map_df.columns:
+            n_prefs = map_df.filter(pl.col("sh4").cast(pl.Utf8).str.zfill(4) == sh4).height
+        rows.append(
+            {
+                "Pos.": r.get("rank"),
+                "SH4": sh4,
+                "Produto": str(r.get("descricao", "") or ""),
+                "valor_usd_fob": float(r.get("valor_usd_fob", 0) or 0),
+                "Empresas (aprox.)": emp.height,
+                "Prefixos CNAE": n_prefs,
+            }
+        )
+    return pl.DataFrame(rows)
+
+
+def build_setor_macro_from_join(join_df: pl.DataFrame) -> pl.DataFrame:
+    if join_df.is_empty() or "divisao_cnae" not in join_df.columns:
+        return pl.DataFrame()
+    tot = join_df.height
+    if tot == 0:
+        return pl.DataFrame()
+    agg = (
+        join_df.with_columns(
+            pl.col("divisao_cnae")
+            .map_elements(macro_setor_from_divisao, return_dtype=pl.Utf8)
+            .alias("macro_setor")
+        )
+        .group_by("macro_setor")
+        .len()
+        .rename({"len": "quantidade"})
+        .with_columns((100.0 * pl.col("quantidade") / tot).round(2).alias("percentual"))
+        .sort("quantidade", descending=True)
+    )
+    return agg
+
+
+def build_porte_from_join(join_df: pl.DataFrame) -> pl.DataFrame:
+    """Distribuição MEI / ME / EPP / demais a partir do join municipal."""
+    if join_df.is_empty():
+        return pl.DataFrame()
+    if "tipo_empresa" in join_df.columns:
+        col = "tipo_empresa"
+    elif "porte_cadastral_descricao" in join_df.columns:
+        col = "porte_cadastral_descricao"
+    else:
+        return pl.DataFrame()
+    tot = join_df.height
+    return (
+        join_df.group_by(col)
+        .len()
+        .rename({"len": "quantidade", col: "tipo_empresa"})
+        .with_columns((100.0 * pl.col("quantidade") / tot).round(2).alias("percentual"))
+        .sort("quantidade", descending=True)
+    )
 
 
 def normalize_caged(df: pl.DataFrame) -> pl.DataFrame:
@@ -909,16 +1055,25 @@ def normalize_fin(df: pl.DataFrame) -> pl.DataFrame:
 
 caged_raw, fin_raw, caged_comp_raw = load_data()
 cnpj_resumo_raw, cnpj_mei_raw, cnpj_porte_raw, cnpj_cnae_raw, cnpj_join_raw, cnpj_meis_raw, cnpj_muni_fonte_raw = load_cnpj_botucatu()
+cnpj_setor_raw = load_cnpj_setor_macro()
 comex_meta_raw, comex_mensal_raw, comex_top_exp_raw, comex_top_imp_raw = load_comex_botucatu()
 comex_sh4_cnae_map = load_comex_sh4_cnae_map()
-has_cnpj_export = not cnpj_resumo_raw.is_empty()
+fato_sh4_empresas_raw = load_fato_sh4_empresas()
+_cnpj_tot = (
+    float(cnpj_resumo_raw["total_empresas"][0])
+    if not cnpj_resumo_raw.is_empty() and "total_empresas" in cnpj_resumo_raw.columns
+    else 0.0
+)
+has_cnpj_file = not cnpj_resumo_raw.is_empty()
+has_cnpj_data = _cnpj_tot > 0 or not cnpj_join_raw.is_empty()
+has_cnpj_export = has_cnpj_data
 has_comex = not comex_mensal_raw.is_empty()
 comex_meta_kv: dict[str, str] = (
     {str(r.get("chave", "")): str(r.get("valor", "")) for r in comex_meta_raw.to_dicts()} if not comex_meta_raw.is_empty() else {}
 )
 if caged_raw.is_empty() and fin_raw.is_empty() and caged_comp_raw.is_empty() and not has_cnpj_export and not has_comex:
     st.warning(
-        "⚠️ Nenhum dataset encontrado (CAGED, finanças, comparativo, CNPJ/MEI ou Comex). Verifique os CSV na raiz ou em `data/`."
+        "⚠️ Nenhum dado carregado (CAGED, finanças, comparativo, CNPJ/MEI ou Comex). Execute o pipeline de atualização do observatório."
     )
     st.stop()
 
@@ -988,8 +1143,7 @@ with nav_painel:
     if not caged.is_empty():
         st.markdown("## Emprego formal (CAGED)")
         st.caption(
-            "Admissões e desligamentos usam as colunas **admissao** e **demissao** do CSV (massas somadas no microdado "
-            "antes da agregação por CNAE). O saldo líquido do mês é **Σ saldomovimentacao**."
+            "Admissões e desligamentos somam todos os vínculos do mês no município; o saldo líquido é a diferença entre eles."
         )
         c = caged.filter(pl.col("ano_referencia") == ano)
         if grupo != "Todos":
@@ -1017,10 +1171,27 @@ with nav_painel:
             c_series = c_series.filter(pl.col("Grande Grupo") == grupo)
 
         monthly_full = caged_build_monthly_series(c_series)
-        ord_atual = ano * 12 + month
-        monthly = monthly_full.filter(
-            (pl.col("ord_mes") >= ord_atual - 11) & (pl.col("ord_mes") <= ord_atual)
-        )
+        monthly = monthly_full
+        if not monthly.is_empty():
+            est_ini = float(monthly["Estoque"][0])
+            est_fim = float(monthly["Estoque"][-1])
+            var_est = est_fim - est_ini
+            e1, e2, e3 = st.columns(3)
+            e1.metric(
+                "Estoque acumulado (início da série)",
+                br_int(est_ini),
+                help="Primeiro mês disponível no observatório municipal.",
+            )
+            e2.metric(
+                "Estoque acumulado (último mês)",
+                br_int(est_fim),
+                help="Soma dos saldos líquidos mês a mês até o período mais recente.",
+            )
+            e3.metric(
+                "Crescimento do estoque na série",
+                br_int(var_est),
+                f"{(100.0 * var_est / abs(est_ini)) if est_ini else 0:+.1f}% vs. início",
+            )
         monthly_pd = monthly.to_pandas()
         monthly_pd["Mês Curto"] = monthly_pd.apply(
             lambda r: format_data_ref_curta(f"{int(r['ano_referencia'])}-{int(r['mes_referencia']):02d}"),
@@ -1033,8 +1204,22 @@ with nav_painel:
 
         st.markdown("### Evolução mensal — admissões, desligamentos e estoque")
         st.caption(
-            "Últimos 12 meses no filtro. **Estoque** = Σ saldo mensal acumulado a partir do início da série "
-            "contínua no microdado (primeiro mês com adm+des relevantes), no estilo dos painéis Novo CAGED / Power BI."
+            "Série completa disponível no observatório. **Estoque** é o saldo acumulado mês a mês desde o primeiro "
+            "período da série (leitura alinhada ao Novo CAGED municipal)."
+        )
+        tbl_mensal = monthly.select(["Mês", "Admissões", "Desligamentos", "Saldo", "Estoque"])
+        st.dataframe(
+            tbl_mensal.with_columns(
+                [
+                    pl.col("Admissões").round(0).cast(pl.Int64),
+                    pl.col("Desligamentos").round(0).cast(pl.Int64),
+                    pl.col("Saldo").round(0).cast(pl.Int64),
+                    pl.col("Estoque").round(0).cast(pl.Int64),
+                ]
+            ),
+            width="stretch",
+            height=min(420, 80 + 35 * max(tbl_mensal.height, 4)),
+            hide_index=True,
         )
         fig_line = go.Figure()
         fig_line.add_trace(
@@ -1083,13 +1268,13 @@ with nav_painel:
             yaxis=dict(title="Admissões / Desligamentos"),
             yaxis2=dict(title="Estoque", overlaying="y", side="right", showgrid=False),
         )
-        fig_line.update_xaxes(nticks=6)
+        fig_line.update_xaxes(nticks=min(24, max(6, monthly_pd.shape[0] // 3)), tickangle=-45)
         aplicar_layout_clean(fig_line, unified_hover=True)
         plotly_mobile_friendly(fig_line, key="pl_caged_line")
         st.download_button(
-            "Baixar CSV — admissões e desligamentos (mensal)",
+            "Exportar evolução mensal",
             data=csv_bytes_from_pandas(monthly_pd[["Mês", "Admissões", "Desligamentos", "Saldo", "Estoque"]]),
-            file_name="caged_admissoes_desligamentos.csv",
+            file_name="caged_evolucao_mensal.csv",
             mime="text/csv",
             key="dl_caged_line",
             width="stretch",
@@ -1106,7 +1291,7 @@ with nav_painel:
         aplicar_layout_clean(fig_bar)
         plotly_mobile_friendly(fig_bar, key="pl_caged_bar")
         st.download_button(
-            "Baixar CSV — saldo mensal (CAGED)",
+            "Exportar — saldo mensal (CAGED)",
             data=csv_bytes_from_pandas(monthly_pd[["Mês", "Saldo"]]),
             file_name="caged_evolucao_saldo.csv",
             mime="text/csv",
@@ -1183,7 +1368,7 @@ with nav_painel:
                 aplicar_layout_clean(fig_comp, unified_hover=False)
                 plotly_mobile_friendly(fig_comp, key="pl_caged_comp")
                 st.download_button(
-                    "Baixar CSV — saldo por município e mês",
+                    "Exportar — saldo por município e mês",
                     data=csv_bytes_from_pandas(comp_pd[["ano_referencia", "mes_referencia", "Municipio", "Saldo"]]),
                     file_name="caged_comparativo_municipios.csv",
                     mime="text/csv",
@@ -1247,7 +1432,7 @@ with nav_painel:
         aplicar_layout_clean(fig_hbar)
         plotly_mobile_friendly(fig_hbar, key="pl_caged_hbar")
         st.download_button(
-            "Baixar CSV — saldo por atividade",
+            "Exportar — saldo por atividade",
             data=csv_bytes_from_pandas(saldo_atividade_pd),
             file_name="caged_saldo_por_atividade.csv",
             mime="text/csv",
@@ -1285,7 +1470,7 @@ with nav_painel:
             ]
         )
         st.download_button(
-            "Baixar CSV — ranking CNAE (maiores e menores)",
+            "Exportar — ranking CNAE (maiores e menores)",
             data=csv_bytes_from_pandas(top_m_export.to_pandas()),
             file_name="caged_ranking_cnae_top5.csv",
             mime="text/csv",
@@ -1293,27 +1478,29 @@ with nav_painel:
             width="stretch",
         )
 
-    if has_cnpj_export:
+    if has_cnpj_file or not cnpj_join_raw.is_empty():
         st.divider()
         st.header("Cadastro CNPJ e MEI (Botucatu)")
         st.caption(
             "Empresas com ao menos um estabelecimento no município (IBGE 3507506). "
-            "MEI: opção pelo Simples sem data de exclusão; ativo/inativo conforme situação cadastral do estabelecimento representativo (matriz no município, se houver). "
-            "Fonte: dados abertos da Receita Federal em `https://dadosabertos.rfb.gov.br/CNPJ/dados_abertos_cnpj/{{AAAA-MM}}/` "
-            "(Estabelecimentos + Empresas + Simples; `Municipios.zip` só para o código interno do município no filtro)."
+            "MEI: opção pelo Simples sem data de exclusão; ativo/inativo conforme situação cadastral do estabelecimento representativo."
         )
-        rs = cnpj_resumo_raw.to_dicts()[0]
-        fu = str(rs.get("fonte_url", "") or "")
-        fu_disp = (fu[:80] + "…") if len(fu) > 80 else fu
-        st.caption(f"Referência da base: **{rs.get('ref_data_extracao', '')}** · Arquivo-fonte: `{fu_disp}`")
+        if not has_cnpj_data:
+            st.warning(
+                "Cadastro municipal ainda não carregado (0 empresas no resumo). "
+                "Execute a atualização de CNPJ no pipeline do observatório para habilitar porte, setores e o cruzamento Comex."
+            )
+        rs = cnpj_resumo_raw.to_dicts()[0] if not cnpj_resumo_raw.is_empty() else {}
+        if rs:
+            st.caption(f"Referência da base: **{rs.get('ref_data_extracao', '')}** · Fonte: Receita Federal (dados abertos CNPJ).")
 
-        tot_e = float(rs.get("total_empresas", 0) or 0)
-        mei_any = float(rs.get("mei_opcao_sem_exclusao", 0) or 0)
+        tot_e = float(rs.get("total_empresas", 0) or 0) if rs else float(cnpj_join_raw.height)
+        mei_any = float(rs.get("mei_opcao_sem_exclusao", 0) or 0) if rs else 0.0
         if tot_e > 0 and mei_any == 0:
             st.warning(
-                "MEI zerado com empresas encontradas: em geral a pasta de dados (`CNPJ_DADOS_ABERTOS_REF` / `CNPJ_BASE_URL`) "
-                "não bate com o layout do `Simples.zip` (colunas) ou o mês ainda não foi publicado no portal da RFB. "
-                "Ajuste a competência e rode de novo o pipeline com `PIPELINE_INCLUDE_CNPJ=1`."
+                "MEI zerado com empresas encontradas: em geral a competência dos dados abertos não coincide com o Simples "
+                "ou o mês ainda não foi publicado no portal da Receita Federal. "
+                "Ajuste a competência e rode de novo a atualização de CNPJ no pipeline."
             )
 
         tab_vis, tab_join = st.tabs(
@@ -1330,7 +1517,7 @@ with nav_painel:
                 if not cnpj_muni_fonte_raw.is_empty():
                     st.dataframe(cnpj_muni_fonte_raw, width="stretch", hide_index=True)
                     st.download_button(
-                        "Baixar CSV — rastreio município / join",
+                        "Exportar — rastreio município / join",
                         data=csv_bytes_from_pandas(cnpj_muni_fonte_raw.to_pandas()),
                         file_name="cnpj_botucatu_municipio_fonte.csv",
                         mime="text/csv",
@@ -1338,7 +1525,7 @@ with nav_painel:
                         width="stretch",
                     )
                 else:
-                    st.info("Arquivo `cnpj_botucatu_municipio_fonte.csv` não encontrado (rode o ETL CNPJ atualizado).")
+                    st.info("Dados de fonte municipal do CNPJ indisponíveis. Atualize o cadastro empresarial no pipeline.")
 
             with st.expander("Glossário rápido"):
                 st.markdown(
@@ -1352,11 +1539,14 @@ with nav_painel:
                 )
 
             m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Empresas (raiz CNPJ)", br_int(float(rs.get("total_empresas", 0) or 0)))
-            m2.metric("Estabelecimentos no município", br_int(float(rs.get("total_estabelecimentos", 0) or 0)))
-            m3.metric("MEI ativos", br_int(float(rs.get("mei_ativos", 0) or 0)))
-            m4.metric("MEI inativos (CNPJ)", br_int(float(rs.get("mei_inativos_cnpj", 0) or 0)))
-            m5.metric("MEI no Simples (sem exclusão)", br_int(float(rs.get("mei_opcao_sem_exclusao", 0) or 0)))
+            m1.metric("Empresas (raiz CNPJ)", br_int(tot_e))
+            m2.metric(
+                "Estabelecimentos no município",
+                br_int(float(rs.get("total_estabelecimentos", 0) or 0) if rs else cnpj_join_raw.height),
+            )
+            m3.metric("MEI ativos", br_int(float(rs.get("mei_ativos", 0) or 0) if rs else 0))
+            m4.metric("MEI inativos (CNPJ)", br_int(float(rs.get("mei_inativos_cnpj", 0) or 0) if rs else 0))
+            m5.metric("MEI no Simples (sem exclusão)", br_int(mei_any))
 
             if not cnpj_mei_raw.is_empty():
                 st.markdown("### Movimento MEI (opção e exclusão no Simples)")
@@ -1373,7 +1563,7 @@ with nav_painel:
                 aplicar_layout_clean(fig_mei)
                 plotly_mobile_friendly(fig_mei, key="pl_cnpj_mei_mensal")
                 st.download_button(
-                    "Baixar CSV — movimento MEI mensal",
+                    "Exportar — movimento MEI mensal",
                     data=csv_bytes_from_pandas(mei_pd),
                     file_name="cnpj_botucatu_mei_mensal.csv",
                     mime="text/csv",
@@ -1383,10 +1573,50 @@ with nav_painel:
             else:
                 st.info("Sem série mensal de MEI (arquivo vazio ou não gerado).")
 
-            if not cnpj_porte_raw.is_empty():
-                st.markdown("### Participação por tipo (porte / MEI)")
+            setor_df = cnpj_setor_raw if not cnpj_setor_raw.is_empty() else build_setor_macro_from_join(cnpj_join_raw)
+            porte_df = cnpj_porte_raw if not cnpj_porte_raw.is_empty() else build_porte_from_join(cnpj_join_raw)
+
+            if not setor_df.is_empty():
+                st.markdown("### Estrutura econômica do município (macrosetores)")
+                st.caption(
+                    "Participação das empresas por **Agropecuária**, **Indústria**, **Comércio**, **Serviços** e **Saúde**, "
+                    "a partir da divisão CNAE 2.0 do estabelecimento representativo."
+                )
+                sp = setor_df.to_pandas()
+                sp["pct_label"] = sp["percentual"].map(lambda x: f"{float(x):.1f}%".replace(".", ","))
+                c_left, c_right = st.columns(2)
+                with c_left:
+                    fig_setor = px.pie(
+                        sp,
+                        names="macro_setor",
+                        values="quantidade",
+                        title="Distribuição por macrosetor",
+                        hole=0.35,
+                    )
+                    aplicar_layout_clean(fig_setor)
+                    plotly_mobile_friendly(fig_setor, key="pl_cnpj_setor_pie")
+                with c_right:
+                    fig_setor_b = px.bar(
+                        sp.sort_values("quantidade", ascending=True),
+                        x="quantidade",
+                        y="macro_setor",
+                        orientation="h",
+                        text="pct_label",
+                        title="Empresas e % do total municipal",
+                    )
+                    fig_setor_b.update_traces(textposition="outside")
+                    aplicar_layout_clean(fig_setor_b)
+                    plotly_mobile_friendly(fig_setor_b, key="pl_cnpj_setor_bar")
+                st.dataframe(
+                    setor_df.select(["macro_setor", "quantidade", "percentual"]),
+                    width="stretch",
+                    hide_index=True,
+                )
+
+            if not porte_df.is_empty():
+                st.markdown("### Participação por porte (MEI, ME, EPP e demais)")
                 st.caption("Percentual sobre o total de empresas (raiz) com estabelecimento em Botucatu.")
-                pp = cnpj_porte_raw.to_pandas()
+                pp = porte_df.to_pandas()
                 pp["pct_label"] = pp["percentual"].map(lambda x: f"{float(x):.1f}%".replace(".", ","))
                 fig_pie = px.bar(
                     pp.sort_values("quantidade", ascending=True),
@@ -1400,7 +1630,7 @@ with nav_painel:
                 aplicar_layout_clean(fig_pie)
                 plotly_mobile_friendly(fig_pie, key="pl_cnpj_porte")
                 st.download_button(
-                    "Baixar CSV — distribuição por tipo",
+                    "Exportar — distribuição por tipo",
                     data=csv_bytes_from_pandas(pp.drop(columns=["pct_label"], errors="ignore")),
                     file_name="cnpj_botucatu_porte_pct.csv",
                     mime="text/csv",
@@ -1432,7 +1662,7 @@ with nav_painel:
                     aplicar_layout_clean(fig_c)
                     plotly_mobile_friendly(fig_c, key="pl_cnpj_cnae")
                 st.download_button(
-                    "Baixar CSV — CNAE × tipo (completo)",
+                    "Exportar — CNAE × tipo (completo)",
                     data=csv_bytes_from_pandas(cnpj_cnae_raw.to_pandas()),
                     file_name="cnpj_botucatu_cnae_x_tipo.csv",
                     mime="text/csv",
@@ -1441,7 +1671,7 @@ with nav_painel:
                 )
 
             st.download_button(
-                "Baixar CSV — resumo CNPJ/MEI (metadados + totais)",
+                "Exportar — resumo CNPJ/MEI (metadados + totais)",
                 data=csv_bytes_from_pandas(cnpj_resumo_raw.to_pandas()),
                 file_name="cnpj_botucatu_resumo.csv",
                 mime="text/csv",
@@ -1458,10 +1688,10 @@ with nav_painel:
             if not cnpj_join_raw.is_empty():
                 njoin = cnpj_join_raw.height
                 prev_n = min(2000, njoin)
-                st.caption(f"Pré-visualização: **{prev_n}** de **{njoin}** linhas (o CSV completo está no botão de download).")
+                st.caption(f"Pré-visualização: **{prev_n}** de **{njoin}** registros (exportação completa no botão abaixo).")
                 st.dataframe(cnpj_join_raw.head(prev_n), width="stretch", height=420)
                 st.download_button(
-                    "Baixar CSV — join por empresa (`cnpj_botucatu_join_empresas.csv`)",
+                    "Exportar cadastro por empresa",
                     data=csv_bytes_from_pandas(cnpj_join_raw.to_pandas()),
                     file_name="cnpj_botucatu_join_empresas.csv",
                     mime="text/csv",
@@ -1469,7 +1699,7 @@ with nav_painel:
                     width="stretch",
                 )
             else:
-                st.info("Sem arquivo de join (`cnpj_botucatu_join_empresas.csv`). Rode o ETL CNPJ atualizado com `PIPELINE_INCLUDE_CNPJ=1`.")
+                st.info("Cadastro detalhado por empresa indisponível. Ative a extração de CNPJ no pipeline do observatório.")
 
 
 with nav_pref:
@@ -1565,7 +1795,7 @@ with nav_pref:
                     st.markdown("#### Evolução do saldo (12 meses)")
                     plotly_mobile_friendly(fig_evo, key="pl_fin_evo")
                     st.download_button(
-                        "Baixar CSV — evolução financeira (mensal)",
+                        "Exportar — evolução financeira (mensal)",
                         data=csv_bytes_from_pandas(evo_pd[["Ano", "Mes", "Total"]]),
                         file_name="financeiro_evolucao_12_meses.csv",
                         mime="text/csv",
@@ -1614,7 +1844,7 @@ with nav_pref:
                         help="Apenas esta lista altera os totais acima; tocar nas barras não dispara ação.",
                     )
                     st.download_button(
-                        "Baixar CSV — saldo por instituição",
+                        "Exportar — saldo por instituição",
                         data=csv_bytes_from_pandas(dist_pd[["Instituicao", "Total"]]),
                         file_name="financeiro_saldo_por_instituicao.csv",
                         mime="text/csv",
@@ -1639,9 +1869,8 @@ with nav_comex:
     )
     if not has_comex:
         st.info(
-            "Nenhum `comex_botucatu_mensal.csv` na raiz ou em `data/`. Gere com `python comexstat_botucatu_etl.py` "
-            "ou `PIPELINE_INCLUDE_COMEX=1` + `python pipeline_botucatu.py`. A API do MDIC pode responder **429**: "
-            "aumente `COMEX_REQUEST_PAUSE_SEC` (padrão 12s) se precisar."
+            "Dados de balança comercial indisponíveis. Execute a atualização Comex no pipeline do observatório. "
+            "Se a API do MDIC limitar requisições (erro 429), aguarde e tente novamente mais tarde."
         )
     else:
 
@@ -1931,47 +2160,97 @@ with nav_comex:
             height=120,
         )
 
-        st.subheader("Cruzamento SH4 × CNAE (Botucatu)")
+        st.subheader("Rastreabilidade indicativa: SH4 → CNAE → empresas")
         st.caption(
-            "Lista aproximada: prefixos de CNAE fiscal sugeridos para cada SH4 em `data/comex_sh4_cnae_aproximacao.csv`. "
-            "O Comex não associa produto a CNPJ."
+            "Cruzamento **indicativo** entre os produtos que mais movimentam a balança comercial do município "
+            "e empresas de Botucatu cujo CNAE fiscal (principal ou secundário) é compatível com o produto (SH4). "
+            "O Comex não informa CNPJ por produto."
         )
-        sh4_labels = comex_sh4_select_labels(comex_top_exp_raw, comex_top_imp_raw, comex_sh4_cnae_map)
-        if not sh4_labels:
-            st.caption("Sem SH4 no ranking nem no catálogo de mapeamento.")
-        else:
-            sh4_pick = st.selectbox(
-                "SH4",
-                options=list(sh4_labels.keys()),
-                format_func=lambda k: sh4_labels[k],
-                key="comex_sh4_cnae_pick",
+        tab_rast_ex, tab_rast_im, tab_rast_det = st.tabs(
+            ["Principais exportações", "Principais importações", "Consulta por SH4"]
+        )
+        with tab_rast_ex:
+            rast_ex = comex_rastreabilidade_resumo(
+                comex_top_exp_raw, cnpj_join_raw, comex_sh4_cnae_map, fato_sh4_empresas_raw
             )
-            sh4z = str(sh4_pick).strip().zfill(4)
-            submap = comex_sh4_cnae_map.filter(pl.col("sh4") == sh4z)
-            if submap.is_empty():
-                st.info("Este SH4 não está no CSV de mapeamento; edite `data/comex_sh4_cnae_aproximacao.csv`.")
+            if rast_ex.is_empty():
+                st.info("Sem ranking de exportação ou cadastro CNPJ para cruzar.")
             else:
-                emp_sh4, notas_map = empresas_botucatu_por_sh4(cnpj_join_raw, comex_sh4_cnae_map, sh4_pick)
-                if cnpj_join_raw.is_empty():
-                    st.caption("Gere `cnpj_botucatu_join_empresas.csv` com o ETL de CNPJ para listar empresas.")
-                elif emp_sh4.is_empty():
-                    st.caption("Nenhuma empresa no município com CNAE fiscal principal compatível com os prefixos mapeados.")
+                st.dataframe(
+                    rast_ex.with_columns(
+                        [
+                            pl.col("valor_usd_fob")
+                            .map_elements(_fmt_cell_usd_tbl, return_dtype=pl.Utf8)
+                            .alias("US$ FOB (município)"),
+                        ]
+                    ).drop("valor_usd_fob"),
+                    width="stretch",
+                    height=420,
+                    hide_index=True,
+                )
+        with tab_rast_im:
+            rast_im = comex_rastreabilidade_resumo(
+                comex_top_imp_raw, cnpj_join_raw, comex_sh4_cnae_map, fato_sh4_empresas_raw
+            )
+            if rast_im.is_empty():
+                st.info("Sem ranking de importação ou cadastro CNPJ para cruzar.")
+            else:
+                st.dataframe(
+                    rast_im.with_columns(
+                        [
+                            pl.col("valor_usd_fob")
+                            .map_elements(_fmt_cell_usd_tbl, return_dtype=pl.Utf8)
+                            .alias("US$ FOB (município)"),
+                        ]
+                    ).drop("valor_usd_fob"),
+                    width="stretch",
+                    height=420,
+                    hide_index=True,
+                )
+        with tab_rast_det:
+            sh4_labels = comex_sh4_select_labels(comex_top_exp_raw, comex_top_imp_raw, comex_sh4_cnae_map)
+            if not sh4_labels:
+                st.caption("Sem SH4 no ranking nem no catálogo de mapeamento.")
+            else:
+                sh4_pick = st.selectbox(
+                    "SH4",
+                    options=list(sh4_labels.keys()),
+                    format_func=lambda k: sh4_labels[k],
+                    key="comex_sh4_cnae_pick",
+                )
+                sh4z = str(sh4_pick).strip().zfill(4)
+                submap = comex_sh4_cnae_map.filter(pl.col("sh4") == sh4z)
+                if submap.is_empty():
+                    st.info("Este produto ainda não possui mapeamento CNAE no catálogo do observatório.")
                 else:
-                    st.caption(f"{emp_sh4.height} registro(s) no join municipal.")
-                    notas_txt = [str(n).strip() for n in notas_map if str(n).strip()]
-                    if notas_txt:
-                        with st.expander("Notas do mapeamento SH4 → CNAE", expanded=False):
-                            for n in notas_txt:
-                                st.text(n)
-                    st.dataframe(emp_sh4, width="stretch", height=360)
-                    st.download_button(
-                        "CSV — empresas (aproximação por SH4)",
-                        data=csv_bytes_from_pandas(emp_sh4.to_pandas()),
-                        file_name=f"comex_sh4_{sh4z}_empresas_botucatu_aprox.csv",
-                        mime="text/csv",
-                        key="dl_comex_sh4_cnae",
-                        width="stretch",
+                    emp_sh4, notas_map = empresas_botucatu_por_sh4(
+                        cnpj_join_raw, comex_sh4_cnae_map, sh4_pick, fato_df=fato_sh4_empresas_raw
                     )
+                    notas_txt = [str(n).strip() for n in notas_map if str(n).strip()]
+                    crit_view = submap.select(
+                        [c for c in ["cnae_prefix", "nota"] if c in submap.columns]
+                    ).rename({"cnae_prefix": "Prefixo CNAE", "nota": "Descrição da atividade"})
+                    with st.expander("Critérios CNAE da aproximação", expanded=emp_sh4.is_empty()):
+                        st.dataframe(crit_view, width="stretch", hide_index=True)
+                        for n in notas_txt:
+                            st.caption(n)
+                    if emp_sh4.is_empty():
+                        st.info(
+                            "Nenhuma empresa nominal listada para este produto no município. "
+                            "Os prefixos CNAE acima indicam o recorte usado; atualize o cadastro CNPJ municipal "
+                            "no pipeline para obter razão social e CNPJ."
+                        )
+                    else:
+                        st.caption(f"{emp_sh4.height} empresa(s) ou vínculo(s) aproximado(s) no município.")
+                        st.dataframe(emp_sh4, width="stretch", height=360)
+                        st.download_button(
+                            "Exportar empresas (aproximação)",
+                            data=csv_bytes_from_pandas(emp_sh4.to_pandas()),
+                            file_name=f"comex_sh4_{sh4z}_empresas_aproximacao.csv",
+                            mime="text/csv",
+                            key="dl_comex_sh4_cnae",
+                            width="stretch",
+                        )
 
         c1, c2 = st.columns(2)
         with c1:

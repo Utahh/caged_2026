@@ -36,6 +36,12 @@ import requests
 BASE_DIR = Path(__file__).resolve().parent
 WORK_DIR = BASE_DIR / "tmp_cnpj_botucatu"
 BOTUCATU_IBGE_7 = "3507506"
+# Código interno RFB em Municipios.zip (Botucatu/SP) + IBGE — usados se o ZIP de municípios falhar.
+BOTUCATU_RFB_CODIGOS_FALLBACK = frozenset({"6249", "3507506", "350750"})
+# Espelho estável (mesma árvore de ZIPs da RFB) quando dadosabertos.rfb.gov.br não responde.
+CNPJ_DEFAULT_MIRROR_BASE = (
+    "https://github.com/jonathands/dados-abertos-receita-cnpj/releases/download/2024.09/"
+)
 # A coluna "município" dos Estabelecimentos usa o código interno da tabela Municipios.zip (ex.: 6249), não o IBGE de 7 dígitos.
 
 
@@ -118,13 +124,18 @@ def norm_ibge_municipio(v: object) -> str:
     return d.zfill(7)[-7:]
 
 
+def norm_municipio_codigo_rfb(v: object) -> str:
+    """Remove aspas e não-dígitos do código de município nos Estabelecimentos."""
+    return re.sub(r"\D", "", str(v or "").strip().strip('"'))
+
+
 def fetch_codigos_municipio_botucatu(work_dir: Path, base_url: str) -> Set[str]:
     """Lê Municipios.zip da RFB e devolve códigos a filtrar (interno + IBGE)."""
-    out: Set[str] = set()
+    out: Set[str] = set(BOTUCATU_RFB_CODIGOS_FALLBACK)
     url = f"{base_url.rstrip('/')}/Municipios.zip"
     zpath = work_dir / "Municipios.zip"
     log("Baixando Municipios.zip (tabela de códigos de município da RFB)…")
-    download_zip(url, zpath)
+    download_zip(url, zpath, timeout_connect=25, timeout_read=180)
     try:
         with zipfile.ZipFile(zpath, "r") as z:
             member = first_member_csv(z)
@@ -135,27 +146,30 @@ def fetch_codigos_municipio_botucatu(work_dir: Path, base_url: str) -> Set[str]:
         except OSError:
             pass
     for line in text.splitlines():
-        if "BOTUCATU" in line.upper():
-            parts = line.split(";")
-            if parts:
-                internal = re.sub(r"\D", "", parts[0])
-                if internal:
-                    out.add(internal)
-            break
-    out.update({"3507506", "350750"})
+        up = line.upper()
+        if "BOTUCATU" not in up:
+            continue
+        for part in line.split(";"):
+            code = norm_municipio_codigo_rfb(part)
+            if code:
+                out.add(code)
+        if norm_ibge_municipio(line) == BOTUCATU_IBGE_7:
+            out.add(BOTUCATU_IBGE_7)
     log(f"Códigos de município usados no filtro Botucatu: {sorted(out)}")
     return out
 
 
 def matches_municipio_codigos(raw: object, codigos: Set[str]) -> bool:
     """True se o valor for exatamente um dos códigos (evita casar 6249 dentro do CNPJ)."""
-    d = re.sub(r"\D", "", str(raw or ""))
+    d = norm_municipio_codigo_rfb(raw)
     if not d:
         return False
-    targets = {re.sub(r"\D", "", str(x)) for x in codigos if str(x).strip()}
+    targets = {norm_municipio_codigo_rfb(x) for x in codigos if str(x).strip()}
     if d in targets:
         return True
     n7 = norm_ibge_municipio(d)
+    if n7 == BOTUCATU_IBGE_7:
+        return True
     for c in targets:
         if len(c) >= 6 and norm_ibge_municipio(c) == n7:
             return True
@@ -188,7 +202,7 @@ def estabelecimento_usecols_from_municipio_idx(mi: int) -> List[int]:
     def ix(k: int) -> int:
         return k if k < 4 else k + shift
 
-    cols = [ix(0), ix(1), ix(2), ix(3), ix(5), ix(10), ix(11), ix(19)]
+    cols = [ix(0), ix(1), ix(2), ix(3), ix(5), ix(10), ix(11), ix(12), ix(19)]
     cols.append(int(mi))
     return cols
 
@@ -268,6 +282,7 @@ def iter_estabelecimentos_botucatu(
         "situacao_cadastral",
         "data_inicio_atividade",
         "cnae_fiscal_principal",
+        "cnae_secundarios",
         "uf",
         "municipio",
     ]
@@ -525,6 +540,25 @@ def pick_representative_estabelecimento(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop_duplicates("cnpj_basico", keep="first").drop(columns=["matriz_flag"], errors="ignore")
 
 
+def macro_setor_from_divisao(divisao: object) -> str:
+    """Agrega divisão CNAE (2 dígitos) em macrosetores para o painel municipal."""
+    d = re.sub(r"\D", "", str(divisao or ""))
+    if not d:
+        return "Outros"
+    n = int(d[:2]) if len(d) >= 2 else int(d.zfill(2))
+    if 1 <= n <= 3:
+        return "Agropecuária"
+    if 5 <= n <= 43:
+        return "Indústria"
+    if 45 <= n <= 47:
+        return "Comércio"
+    if n == 86:
+        return "Saúde"
+    if 49 <= n <= 99:
+        return "Serviços"
+    return "Outros"
+
+
 def porte_label(code: object) -> str:
     s = str(code).strip() if code is not None else ""
     if not s or s.lower() == "nan":
@@ -560,6 +594,7 @@ JOIN_EMPRESAS_CSV_COLUMNS = [
     "data_inicio_atividade",
     "cnae_fiscal_principal",
     "cnae_subclasse",
+    "cnaes_secundarios",
     "divisao_cnae",
     "divisao_descricao",
     "uf",
@@ -674,6 +709,17 @@ def build_join_empresas_export(
     jb["mei_ativo"] = jb["mei_ativo"].map(lambda x: "1" if x else "0")
     jb["mei_inativo_cnpj"] = jb["mei_inativo_cnpj"].map(lambda x: "1" if x else "0")
 
+    if "cnae_secundarios" in jb.columns:
+        jb["cnaes_secundarios"] = (
+            jb["cnae_secundarios"]
+            .fillna("")
+            .astype(str)
+            .str.replace('"', "", regex=False)
+            .str.strip()
+        )
+    else:
+        jb["cnaes_secundarios"] = ""
+
     jb2 = jb.rename(columns={"municipio": "municipio_codigo_rfb_estabelecimento"})
     cols = [c for c in JOIN_EMPRESAS_CSV_COLUMNS if c in jb2.columns]
     out = jb2[cols].copy()
@@ -727,19 +773,43 @@ def norm_cnae_subclasse(v: object) -> str:
     return d.zfill(7) if d else ""
 
 
+def _cnpj_rfb_ref_candidates() -> List[str]:
+    explicit = os.environ.get("CNPJ_DADOS_ABERTOS_REF", "").strip()
+    if explicit:
+        return [explicit]
+    y, m = date.today().year, date.today().month
+    refs: List[str] = []
+    for lag in range(2, 9):
+        yy, mm = _subtract_months(y, m, lag)
+        refs.append(f"{yy}-{mm:02d}")
+    return refs
+
+
 def cnpj_download_base_candidates(user_base: Optional[str]) -> List[str]:
     """
-    Ordem de tentativa: URL explícita (CNPJ_BASE_URL); portal oficial RFB (pasta AAAA-MM);
-    espelho opcional (somente se `CNPJ_MIRROR_BASE_URL` estiver definido e `CNPJ_TRY_MIRROR_FALLBACK` ativo).
+    Ordem: `CNPJ_BASE_URL` (se definido); várias pastas AAAA-MM no portal RFB;
+    `CNPJ_MIRROR_BASE_URL`; espelho padrão (mesma árvore de ZIPs), se `CNPJ_USE_DEFAULT_MIRROR` ≠ 0.
     """
     if (user_base or "").strip():
         u = (user_base or "").strip()
         return [u if u.endswith("/") else u + "/"]
-    out: List[str] = [resolve_cnpj_base_url()]
+    out: List[str] = []
+    seen: Set[str] = set()
+
+    def _add(url: str) -> None:
+        u = url if url.endswith("/") else url + "/"
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+
+    for ref in _cnpj_rfb_ref_candidates():
+        _add(f"https://dadosabertos.rfb.gov.br/CNPJ/dados_abertos_cnpj/{ref}/")
     if os.environ.get("CNPJ_TRY_MIRROR_FALLBACK", "1").strip().lower() not in ("0", "false", "no", "off"):
         m = os.environ.get("CNPJ_MIRROR_BASE_URL", "").strip()
         if m:
-            out.append(m if m.endswith("/") else m + "/")
+            _add(m)
+    if os.environ.get("CNPJ_USE_DEFAULT_MIRROR", "1").strip().lower() not in ("0", "false", "no", "off"):
+        _add(CNPJ_DEFAULT_MIRROR_BASE)
     return out
 
 
@@ -752,8 +822,9 @@ def run_cnpj_botucatu_etl(
     Executa download + agregação. Tenta, em sequência, a URL configurada (se houver), o portal oficial
     da RFB e, se configurado, uma segunda base (`CNPJ_MIRROR_BASE_URL`).
     """
+    effective_base = (base_url or os.environ.get("CNPJ_BASE_URL", "")).strip() or None
     last_exc: Optional[BaseException] = None
-    for u in cnpj_download_base_candidates(base_url):
+    for u in cnpj_download_base_candidates(effective_base):
         try:
             return _run_cnpj_botucatu_etl_at(u, municipio_ibge, municipio_nome)
         except Exception as exc:
@@ -817,35 +888,11 @@ def _run_cnpj_botucatu_etl_at(
             pass
 
     if not estab_parts:
-        log("Nenhum estabelecimento encontrado para o município — abortando agregações.")
-        empty_join = pd.DataFrame(columns=JOIN_EMPRESAS_CSV_COLUMNS)
-        return {
-            "resumo": pd.DataFrame(
-                [
-                    {
-                        "ref_data_extracao": pd.Timestamp.utcnow().strftime("%Y-%m-%d"),
-                        "fonte_url": resolved_url,
-                        "municipio_ibge": municipio_ibge,
-                        "municipio_nome": municipio_nome,
-                        "total_empresas": 0,
-                        "total_estabelecimentos": 0,
-                        "mei_ativos": 0,
-                        "mei_inativos_cnpj": 0,
-                        "mei_opcao_sem_exclusao": 0,
-                    }
-                ]
-            ),
-            "mei_mensal": pd.DataFrame(columns=["ano_mes", "aberturas_mei", "exclusoes_mei"]),
-            "porte_pct": pd.DataFrame(columns=["tipo_empresa", "quantidade", "percentual"]),
-            "cnae_x_tipo": pd.DataFrame(
-                columns=["tipo_empresa", "divisao_cnae", "divisao_descricao", "quantidade", "percentual_no_tipo"]
-            ),
-            "join_empresas": empty_join,
-            "meis": empty_join,
-            "municipio_fonte": municipio_fonte_dataframe(
-                municipio_ibge, municipio_nome, codigos_municipio, resolved_url
-            ),
-        }
+        raise RuntimeError(
+            f"Nenhum estabelecimento em Botucatu na base {resolved_url}. "
+            f"Códigos de filtro: {sorted(codigos_municipio)}. "
+            "Confira Municipios.zip, Estabelecimentos0..9 e a URL (portal RFB ou espelho compatível)."
+        )
 
     estab_all = pd.concat(estab_parts, ignore_index=True)
     total_estab = len(estab_all)
@@ -941,6 +988,13 @@ def _run_cnpj_botucatu_etl_at(
         rows_cnae.append(sub)
     cnae_x_tipo = pd.concat(rows_cnae, ignore_index=True) if rows_cnae else pd.DataFrame()
 
+    m2["macro_setor"] = m2["divisao_cnae"].map(macro_setor_from_divisao)
+    vc_setor = m2["macro_setor"].value_counts()
+    setor_macro_pct = (
+        pd.DataFrame({"macro_setor": vc_setor.index.astype(str), "quantidade": vc_setor.values})
+        .assign(percentual=lambda d: (100.0 * d["quantidade"] / total_empresas).round(2))
+        .sort_values("quantidade", ascending=False)
+    )
     join_empresas, meis = build_join_empresas_export(merged, estab_all, cref, municipio_ibge, municipio_nome)
     municipio_fonte = municipio_fonte_dataframe(municipio_ibge, municipio_nome, codigos_municipio, resolved_url)
     log(
@@ -972,6 +1026,7 @@ def _run_cnpj_botucatu_etl_at(
         "mei_mensal": mei_mensal,
         "porte_pct": porte_pct,
         "cnae_x_tipo": cnae_x_tipo,
+        "setor_macro_pct": setor_macro_pct,
         "join_empresas": join_empresas,
         "meis": meis,
         "municipio_fonte": municipio_fonte,
@@ -984,6 +1039,8 @@ def export_cnpj_csvs(dfs: Dict[str, pd.DataFrame], out_dir: Optional[Path] = Non
     dfs["mei_mensal"].to_csv(out / "cnpj_botucatu_mei_mensal.csv", sep=";", index=False, encoding="utf-8-sig")
     dfs["porte_pct"].to_csv(out / "cnpj_botucatu_porte_pct.csv", sep=";", index=False, encoding="utf-8-sig")
     dfs["cnae_x_tipo"].to_csv(out / "cnpj_botucatu_cnae_x_tipo.csv", sep=";", index=False, encoding="utf-8-sig")
+    if "setor_macro_pct" in dfs:
+        dfs["setor_macro_pct"].to_csv(out / "cnpj_botucatu_setor_macro.csv", sep=";", index=False, encoding="utf-8-sig")
     if "join_empresas" in dfs:
         dfs["join_empresas"].to_csv(out / "cnpj_botucatu_join_empresas.csv", sep=";", index=False, encoding="utf-8-sig")
     if "meis" in dfs:

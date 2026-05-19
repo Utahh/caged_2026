@@ -1092,7 +1092,8 @@ def main() -> None:
 
             log("PIPELINE_INCLUDE_CNPJ=1 — iniciando ETL Cadastro CNPJ / MEI (pode levar vários minutos e ~4GB download).")
             try:
-                cnpj_dfs = run_cnpj_botucatu_etl()
+                cnpj_base = os.environ.get("CNPJ_BASE_URL", "").strip() or None
+                cnpj_dfs = run_cnpj_botucatu_etl(base_url=cnpj_base)
                 export_cnpj_csvs(cnpj_dfs)
             finally:
                 cleanup_cnpj_workdir()
@@ -1113,7 +1114,7 @@ def main() -> None:
             log("Rastreabilidade SH4×CNAE×CNPJ (CSV local)…")
             try:
                 fact = run_rastreabilidade_botucatu(BASE_DIR)
-                log(f"Fato SH4×empresas: {len(fact)} linhas → data/processed/fato_sh4_empresas_botucatu.csv")
+                log(f"Fato SH4 x empresas: {len(fact)} linhas em data/processed/fato_sh4_empresas_botucatu.csv")
             except Exception as exc:
                 log(f"Aviso rastreabilidade Comex×CNPJ: {exc}")
         elapsed = time.time() - start

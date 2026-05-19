@@ -1,0 +1,7 @@
+﻿campo;valor
+URL base (pasta AAAA-MM);https://github.com/jonathands/dados-abertos-receita-cnpj/releases/download/2024.09
+Município alvo (IBGE 7 dígitos);3507506
+Nome de referência;Botucatu
+Códigos usados no filtro da coluna municipio (Estabelecimentos);350750, 3507506, 6249
+Papel de Municipios.zip;"Arquivo oficial da RFB com códigos de município do cadastro CNPJ; localizamos a linha do nome e usamos o código interno para casar com a coluna `municipio` dos estabelecimentos (nem sempre é o IBGE de 7 dígitos)."
+Join por empresa (raiz);Agrupamos estabelecimentos no município, escolhemos um representante por `cnpj_basico` (prioriza matriz), cruzamos Empresas (porte) e Simples (MEI) pela mesma chave.
